@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Divinity Config Builder</title>
+
+  <!--
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║  Divinity Config Builder — offline single-page tool              ║
+    ║                                                                  ║
+    ║  Drop this entire BUILDER/ folder anywhere on disk and open      ║
+    ║  index.html in a browser (Chrome/Edge/Firefox).                  ║
+    ║  No server required — all parsing happens client-side.           ║
+    ║                                                                  ║
+    ║  File structure:                                                 ║
+    ║    index.html          ← you are here                           ║
+    ║    css/main.css        ← all styles                             ║
+    ║    js/yaml.js          ← YAML parser                            ║
+    ║    js/schema.js        ← section / nav definitions              ║
+    ║    js/renderers.js     ← HTML render functions                  ║
+    ║    js/app.js           ← app bootstrap, navigation, file I/O    ║
+    ║                                                                  ║
+    ║  Adding a new section:                                           ║
+    ║    1. Add entry to SCHEMA.sections  (schema.js)                 ║
+    ║    2. Add entry to SCHEMA.groups    (schema.js)                 ║
+    ║    3. Write render function         (renderers.js)              ║
+    ║    4. Register in RENDERERS map     (renderers.js bottom)       ║
+    ╚══════════════════════════════════════════════════════════════════╝
+  -->
+
+  <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Navigation sidebar — built dynamically by app.js / buildNav() -->
+  <nav id="nav"></nav>
+
+  <!-- Main content area — filled by app.js / renderSection() -->
+  <main id="content"></main>
+</div>
+
+<!--
+  Script load order matters:
+    1. yaml.js      — defines YAML (no dependencies)
+    2. schema.js    — defines SCHEMA (no dependencies)
+    3. renderers.js — defines RENDERERS (uses mc, SCHEMA)
+    4. app.js       — defines APP, bootstraps on DOMContentLoaded (uses all above)
+-->
+<script src="js/yaml.js"></script>
+<script src="js/schema.js"></script>
+<script src="js/renderers.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
