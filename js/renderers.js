@@ -2065,6 +2065,87 @@ function renderItemGenerator(data, sid) {
 // Sets (item_stats/sets/ folder — one .yml per set)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Gem / socket-item helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Skills list for gems/essences/runes.
+ * Structure: { skillName: { level: 1, 'lore-format': [...] } }
+ * (No chance, no min/max level — just level + lore.)
+ */
+function igGemSkillsList(sid, fname, path, skills) {
+  const loaded = STATE.loaded?.skills;
+  const skillNames = [];
+  if (loaded?._multiFile) {
+    Object.values(loaded.files || {}).forEach(fd => {
+      Object.values(fd || {}).forEach(entry => {
+        if (entry?.name && !skillNames.includes(entry.name)) skillNames.push(entry.name);
+      });
+    });
+  }
+  skillNames.sort();
+
+  const obj = (skills && typeof skills === 'object') ? skills : {};
+  const fid = `${sid}-${fname.replace(/[^a-z0-9]/gi,'_')}-${path.replace(/[^a-z0-9]/gi,'_')}`;
+  const listId = `gsk-opts-${fid}`.slice(0, 60);
+
+  const entries = Object.entries(obj).map(([key, sk]) => {
+    if (!sk || typeof sk !== 'object') return '';
+    const loreLines = sk['lore-format'] ?? [];
+    return `
+      <div style="border:1px solid #333;border-radius:4px;margin-bottom:6px;padding:8px 10px;background:#1a1a1a">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <input class="edit-input" style="flex:1;min-width:120px" value="${esc(key)}"
+            list="${listId}" title="Skill name"
+            onblur="if(this.value.trim()&&this.value.trim()!=='${escJs(key)}')APP.igRenameSkill('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(key)}',this.value.trim())"
+            onkeydown="if(event.key==='Enter')this.blur()">
+          <span class="muted" style="font-size:11px">lvl</span>
+          <input class="edit-input edit-input--num" style="width:55px" type="number" min="1"
+            value="${esc(sk.level ?? 1)}" title="Skill level"
+            oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(path+'.'+key+'.level')}',+this.value)">
+          <button style="padding:2px 6px;background:#3a1e1e;border:1px solid #8a3a3a;border-radius:3px;color:#ea8f8f;cursor:pointer;font-size:11px;margin-left:auto"
+            onclick="if(confirm('Remove skill \\'${escJs(key)}\\'?'))APP.igRemoveFromPath('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(key)}')">🗑</button>
+        </div>
+        <div style="font-size:11px;color:#888;margin-bottom:3px">Lore (one line per entry):</div>
+        ${igLineArray(sid, fname, `${path}.${key}.lore-format`, loreLines)}
+        ${loreLines.length ? lorePreview(loreLines) : ''}
+      </div>`;
+  }).join('');
+
+  const addInput = `
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+      <input id="gsk-add-${fid}" class="edit-input" style="flex:1" placeholder="skill name" list="${listId}">
+      <button class="btn-add-entry" style="white-space:nowrap"
+        onclick="(function(){const el=document.getElementById('gsk-add-${fid}');const k=el.value.trim();if(k){APP.igAddToPath('${sid}','${escJs(fname)}','${escJs(path)}',k,{level:1,'lore-format':[]});el.value=''}})()">+ Add skill</button>
+    </div>
+    <datalist id="${listId}">${skillNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>`;
+
+  return `
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🎯 Skills</div>
+      ${Object.keys(obj).length ? entries : '<p class="muted small">No skills defined.</p>'}
+      ${addInput}
+    </div>`;
+}
+
+/**
+ * Toggle-button group for target-requirements.type array.
+ * Available types: WEAPON, ARMOR, *.
+ */
+const TARGET_ITEM_TYPES = ['WEAPON', 'ARMOR', '*'];
+function igTypeButtons(sid, fname, path, currentArr) {
+  const active = new Set(Array.isArray(currentArr) ? currentArr : []);
+  return `<div style="display:flex;flex-wrap:wrap;gap:4px">
+    ${TARGET_ITEM_TYPES.map(t => {
+      const on = active.has(t);
+      return `<button
+        style="padding:2px 8px;font-size:11px;cursor:pointer;border-radius:3px;border:1px solid ${on?'#4a8a4a':'#555'};background:${on?'#1e3a1e':'#2a2a2a'};color:${on?'#8fea8f':'#aaa'}"
+        onclick="APP.igToggleArrayValue('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(t)}')">${esc(t)}</button>`;
+    }).join('')}
+  </div>`;
+}
+
 // ---- Sets: render one set file card ----
 function renderSetCard(sid, fname, setData) {
   const fid         = fname.replace(/[^a-z0-9]/gi, '_');
@@ -2077,14 +2158,14 @@ function renderSetCard(sid, fname, setData) {
   const bonusMap    = setData.bonuses?.['by-elements-amount'] ?? {};
 
   const elemRows = Object.entries(elements).map(([elemId, elem]) => `
-    <div class="ig-elem-row">
-      <b class="ig-elem-id">${esc(elemId)}</b>
-      <div style="flex:1">
-        ${cardRow('Materials', igJson(sid, fname, `elements.${elemId}.materials`, elem.materials ?? []))}
-        ${cardRow('Name',      igField(sid, fname, `elements.${elemId}.name`,     elem.name ?? ''))}
+    <div style="border:1px solid #2a2a3a;border-radius:4px;margin-bottom:6px;padding:8px 10px;background:#18181e">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <b style="min-width:90px;font-size:12px;color:#ccc">${esc(elemId)}</b>
+        <button class="btn-icon btn-del" title="Remove element"
+          onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','elements','${escJs(elemId)}')">🗑</button>
       </div>
-      <button class="btn-icon btn-del" title="Remove element"
-        onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','elements','${escJs(elemId)}')">🗑</button>
+      ${cardRow('Name', igField(sid, fname, `elements.${elemId}.name`, elem.name ?? ''))}
+      ${cardRow('Materials', igLineArray(sid, fname, `elements.${elemId}.materials`, elem.materials ?? []))}
     </div>`).join('');
 
   const elemSection = igCollapsible(
@@ -2098,16 +2179,28 @@ function renderSetCard(sid, fname, setData) {
 
   const bonusSections = Object.entries(bonusMap)
     .sort(([a], [b]) => +a - +b)
-    .map(([cnt, bonus]) => igCollapsible(
-      `🎁 ${cnt} piece${+cnt !== 1 ? 's' : ''}`,
-      `${cardRow('Lore',           igJson(sid, fname, `bonuses.by-elements-amount.${cnt}.lore`,           bonus.lore              ?? []))}
-       ${cardRow('Item stats',     igJson(sid, fname, `bonuses.by-elements-amount.${cnt}.item-stats`,      bonus['item-stats']      ?? {}))}
-       ${cardRow('Damage types',   igJson(sid, fname, `bonuses.by-elements-amount.${cnt}.damage-types`,    bonus['damage-types']    ?? {}))}
-       ${cardRow('Defense types',  igJson(sid, fname, `bonuses.by-elements-amount.${cnt}.defense-types`,   bonus['defense-types']   ?? {}))}
-       ${cardRow('Potion effects', igJson(sid, fname, `bonuses.by-elements-amount.${cnt}.potion-effects`,  bonus['potion-effects']  ?? {}))}
-       <button class="btn-icon btn-del" style="margin-top:6px"
-         onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses.by-elements-amount','${escJs(String(cnt))}')">🗑 Remove tier</button>`,
-      true)).join('');
+    .map(([cnt, bonus]) => {
+      const bp = `bonuses.by-elements-amount.${cnt}`;
+      const lore = bonus.lore ?? [];
+      return igCollapsible(
+        `🎁 ${cnt} piece${+cnt !== 1 ? 's' : ''}`,
+        `<div style="margin-bottom:8px">
+           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">📜 Lore</div>
+           ${igLineArray(sid, fname, `${bp}.lore`, lore)}
+           ${lore.length ? lorePreview(lore) : ''}
+         </div>
+         ${igBonusItemStats(sid, fname, `${bp}.item-stats`, bonus['item-stats'] ?? {})}
+         ${igBonusTypeMap(sid, fname, `${bp}.damage-types`,  bonus['damage-types']  ?? {}, 'damage',  'Damage Types',  '⚔️')}
+         ${igBonusTypeMap(sid, fname, `${bp}.defense-types`, bonus['defense-types'] ?? {}, 'defense', 'Defense Types', '🛡️')}
+         <div style="margin-bottom:8px">
+           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🧪 Potion Effects</div>
+           ${igLineKvField(sid, fname, `${bp}.potion-effects`, bonus['potion-effects'] ?? {}, 'EFFECT_TYPE amplifier')}
+           <p class="muted small" style="margin-top:2px">e.g. <code>SPEED 1</code>, <code>STRENGTH 2</code> — one per line. Amplifier 1 = Potion I.</p>
+         </div>
+         <button class="btn-icon btn-del" style="margin-top:6px"
+           onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses.by-elements-amount','${escJs(String(cnt))}')">🗑 Remove tier</button>`,
+        true);
+    }).join('');
 
   const bonusSection = igCollapsible(
     `🎁 Bonus tiers (${Object.keys(bonusMap).length})`,
@@ -2131,12 +2224,12 @@ function renderSetCard(sid, fname, setData) {
             onclick="if(confirm('Remove \\'${escJs(fname)}\\'?'))APP.igRemoveFile('${sid}','${escJs(fname)}')">🗑</button>
         </summary>
         <div class="item-card__body">
-          ${cardRow('Set name',       igField(sid, fname, 'name',           setName,     'edit-input--format'))}
+          ${cardRow('Set name',       igField(sid, fname, 'name',           setName,    'edit-input--format'))}
           <div class="lore-preview" style="margin-bottom:8px">${mc.toHtml(setName)}</div>
           ${cardRow('Prefix',         igField(sid, fname, 'prefix',         prefix))}
           ${cardRow('Suffix',         igField(sid, fname, 'suffix',         suffix))}
-          ${cardRow('Color active',   igField(sid, fname, 'color.active',   colorActive, 'edit-input--format'))}
-          ${cardRow('Color inactive', igField(sid, fname, 'color.inactive', colorInact,  'edit-input--format'))}
+          ${cardRow('Color active',   igField(sid, fname, 'color.active',   colorActive,'edit-input--format'))}
+          ${cardRow('Color inactive', igField(sid, fname, 'color.inactive', colorInact, 'edit-input--format'))}
           ${elemSection}
           ${bonusSection}
         </div>
@@ -2232,19 +2325,23 @@ function renderGemCard(sid, fname, gemData) {
   const usesByLvl  = gemData['uses-by-level']         ?? {};
   const succByLvl  = gemData['success-rate-by-level'] ?? {};
   const bonusByLvl = gemData['bonuses-by-level']      ?? {};
-  const targetReqs = gemData['target-requirements']   ?? {};
+  const skills     = gemData.skills                   ?? {};
+  const tr         = gemData['target-requirements']   ?? {};
 
   const bonusLevels = Object.entries(bonusByLvl)
     .sort(([a], [b]) => +a - +b)
-    .map(([lvl, bonus]) => igCollapsible(
-      `✨ Level ${lvl}`,
-      `${cardRow('Item stats',    igJson(sid, fname, `bonuses-by-level.${lvl}.item-stats`,    bonus['item-stats']    ?? {}))}
-       ${cardRow('Damage types',  igJson(sid, fname, `bonuses-by-level.${lvl}.damage-types`,  bonus['damage-types']  ?? {}))}
-       ${cardRow('Defense types', igJson(sid, fname, `bonuses-by-level.${lvl}.defense-types`, bonus['defense-types'] ?? {}))}
-       ${cardRow('Skills',        igJson(sid, fname, `bonuses-by-level.${lvl}.skills`,        bonus.skills           ?? {}))}
-       <button class="btn-icon btn-del" style="margin-top:6px"
-         onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses-by-level','${escJs(String(lvl))}')">🗑 Remove level</button>`,
-      true)).join('');
+    .map(([lvl, bonus]) => {
+      const bp = `bonuses-by-level.${lvl}`;
+      return igCollapsible(
+        `✨ Level ${lvl}`,
+        `${igBonusItemStats(sid, fname, `${bp}.item-stats`, bonus['item-stats'] ?? {})}
+         ${igBonusTypeMap(sid, fname, `${bp}.damage-types`,  bonus['damage-types']  ?? {}, 'damage',  'Damage Types',  '⚔️')}
+         ${igBonusTypeMap(sid, fname, `${bp}.defense-types`, bonus['defense-types'] ?? {}, 'defense', 'Defense Types', '🛡️')}
+         ${igGemSkillsList(sid, fname, `${bp}.skills`, bonus.skills ?? {})}
+         <button class="btn-icon btn-del" style="margin-top:6px"
+           onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses-by-level','${escJs(String(lvl))}')">🗑 Remove level</button>`,
+        true);
+    }).join('');
 
   const bonusSection = igCollapsible(
     `✨ Bonuses by level (${Object.keys(bonusByLvl).length})`,
@@ -2255,6 +2352,20 @@ function renderGemCard(sid, fname, gemData) {
       <button class="btn-add-entry"
         onclick="APP.igAddGemLevel('${sid}','${escJs(fname)}','gem-lvl-${fid}')">+ Add level</button>
     </div>`, true);
+
+  const targetSection = igCollapsible('🎯 Target requirements', `
+    ${cardRow('Item types', `
+      ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
+      <p class="muted small" style="margin-top:3px">WEAPON / ARMOR / * (any).</p>`)}
+    ${cardRow('Socket category', igField(sid, fname, 'target-requirements.socket', tr.socket ?? 'common'))}
+    ${cardRow('Required tier',   igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+    ${cardRow('Modules (one per line)',
+      `${igLineArray(sid, fname, 'target-requirements.module', Array.isArray(tr.module) ? tr.module : (tr.module ? [tr.module] : []))}
+       <p class="muted small" style="margin-top:2px">Module IDs or <code>*</code> for all.</p>`)}
+    ${cardRow('Level requirements',
+      `${igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'level min:max')}
+       <p class="muted small" style="margin-top:2px">e.g. <code>1 1:10</code> — gem level : allowed item level range.</p>`)}
+  `, false);
 
   return `
     <div class="item-card">
@@ -2269,33 +2380,33 @@ function renderGemCard(sid, fname, gemData) {
         </summary>
         <div class="item-card__body">
           ${cardRow('Material',       igField(sid, fname, 'material',       material))}
-          ${cardRow('Name',           igField(sid, fname, 'name',           name))}
+          ${cardRow('Name',           igField(sid, fname, 'name',           name,     'edit-input--format'))}
+          <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(name)}</div>
           ${cardRow('Socket display', igField(sid, fname, 'socket-display', sockDisp, 'edit-input--format'))}
-          <div class="lore-preview" style="margin-bottom:8px">${mc.toHtml(sockDisp)}</div>
-          ${cardRow('Lore',           igJson(sid, fname, 'lore',            loreLines))}
-          ${lorePreview(loreLines)}
-          ${cardRow('Tier',      igField(sid, fname, 'tier',     tier))}
-          ${cardRow('Enchanted', igCheck(sid, fname, 'enchanted', enchanted))}
-          ${cardRow('Item flags', igJson(sid, fname, 'item-flags', flags))}
-          ${cardRow('Level min', igNum(sid, fname, 'level.min', lvlMin))}
-          ${cardRow('Level max', igNum(sid, fname, 'level.max', lvlMax))}
+          <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(sockDisp)}</div>
+          ${cardRow('Lore', igLineArray(sid, fname, 'lore', loreLines))}
+          ${loreLines.length ? lorePreview(loreLines) : ''}
+          ${cardRow('Tier',       igField(sid, fname, 'tier',      tier))}
+          ${cardRow('Enchanted',  igCheck(sid, fname, 'enchanted', enchanted))}
+          ${cardRow('Item flags', igItemFlags(sid, fname, flags))}
+          ${cardRow('Level min / max',
+            `<div style="display:flex;gap:6px;align-items:center">
+              ${igNum(sid, fname, 'level.min', lvlMin)}
+              <span class="muted">–</span>
+              ${igNum(sid, fname, 'level.max', lvlMax)}
+            </div>`)}
 
           ${igCollapsible('📊 Uses &amp; success rates', `
-            ${cardRow('Uses by level',         igJson(sid, fname, 'uses-by-level',         usesByLvl))}
-            ${cardRow('Success rate by level', igJson(sid, fname, 'success-rate-by-level', succByLvl))}
-            <p class="muted small" style="margin-top:4px">Success rate format: <code>"min:max"</code> per level key, e.g. <code>{"1":"70:90"}</code></p>
+            ${cardRow('Uses by level',
+              `${igLineKvField(sid, fname, 'uses-by-level', usesByLvl, 'level count')}
+               <p class="muted small" style="margin-top:2px">e.g. <code>1 3</code> — gem level : uses count.</p>`)}
+            ${cardRow('Success rate by level',
+              `${igLineKvField(sid, fname, 'success-rate-by-level', succByLvl, 'level min:max')}
+               <p class="muted small" style="margin-top:2px">e.g. <code>1 40:80</code> — gem level : success % range.</p>`)}
           `, false)}
 
           ${bonusSection}
-
-          ${igCollapsible('🎯 Target requirements', `
-            ${cardRow('Item types',    igJson(sid, fname, 'target-requirements.type',   targetReqs.type   ?? []))}
-            ${cardRow('Socket cat.',   igField(sid, fname, 'target-requirements.socket', targetReqs.socket ?? 'common'))}
-            ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier',   targetReqs.tier   ?? ''))}
-            ${cardRow('Modules',       igJson(sid, fname, 'target-requirements.module', targetReqs.module ?? ['*']))}
-            ${cardRow('Level map',     igJson(sid, fname, 'target-requirements.level',  targetReqs.level  ?? {}))}
-            <p class="muted small" style="margin-top:4px">Types: <code>WEAPON</code>, <code>ARMOR</code>, <code>*</code>. Module: <code>*</code> = all. Tier: leave empty for any.</p>
-          `, false)}
+          ${targetSection}
         </div>
       </details>
     </div>`;
@@ -2352,36 +2463,49 @@ function renderGems(data, sid) {
 
 function socketItemBaseRows(sid, fname, data) {
   const loreLines = data.lore ?? [];
+  const flags     = data['item-flags'] ?? [];
+  const usesByLvl = data['uses-by-level']         ?? {};
+  const succByLvl = data['success-rate-by-level'] ?? {};
   return `
-    ${cardRow('Material',        igField(sid, fname, 'material',        data.material         ?? 'PRISMARINE_SHARD'))}
-    ${cardRow('Name',            igField(sid, fname, 'name',            data.name             ?? '', 'edit-input--format'))}
+    ${cardRow('Material',       igField(sid, fname, 'material',       data.material         ?? 'PRISMARINE_SHARD'))}
+    ${cardRow('Name',           igField(sid, fname, 'name',           data.name             ?? '', 'edit-input--format'))}
     <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data.name ?? '')}</div>
-    ${cardRow('Socket display',  igField(sid, fname, 'socket-display',  data['socket-display'] ?? '', 'edit-input--format'))}
+    ${cardRow('Socket display', igField(sid, fname, 'socket-display', data['socket-display'] ?? '', 'edit-input--format'))}
     <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data['socket-display'] ?? '')}</div>
-    ${cardRow('Lore',            igJson(sid,  fname, 'lore',            loreLines))}
-    ${lorePreview(loreLines)}
-    ${cardRow('Tier',            igField(sid, fname, 'tier',            data.tier             ?? 'common'))}
-    ${cardRow('Enchanted',       igCheck(sid, fname, 'enchanted',       !!data.enchanted))}
-    ${cardRow('Item flags',      igJson(sid,  fname, 'item-flags',      data['item-flags']    ?? []))}
+    ${cardRow('Lore', igLineArray(sid, fname, 'lore', loreLines))}
+    ${loreLines.length ? lorePreview(loreLines) : ''}
+    ${cardRow('Tier',      igField(sid, fname, 'tier',      data.tier      ?? 'common'))}
+    ${cardRow('Enchanted', igCheck(sid, fname, 'enchanted', !!data.enchanted))}
+    ${cardRow('Item flags', igItemFlags(sid, fname, flags))}
     ${cardRow('Level min / max',
       `<div style="display:flex;gap:6px;align-items:center">
         ${igNum(sid, fname, 'level.min', data.level?.min ?? 1)}
         <span class="muted">–</span>
         ${igNum(sid, fname, 'level.max', data.level?.max ?? 1)}
       </div>`)}
-    ${cardRow('Uses by level',         igJson(sid, fname, 'uses-by-level',         data['uses-by-level']         ?? {}))}
-    ${cardRow('Success rate by level', igJson(sid, fname, 'success-rate-by-level', data['success-rate-by-level'] ?? {}))}
-    <p class="muted small" style="margin-top:2px">Success rate: <code>"min:max"</code> or flat number per level key.</p>`;
+    ${cardRow('Uses by level',
+      `${igLineKvField(sid, fname, 'uses-by-level', usesByLvl, 'level count')}
+       <p class="muted small" style="margin-top:2px">e.g. <code>1 3</code> — gem level : uses count.</p>`)}
+    ${cardRow('Success rate by level',
+      `${igLineKvField(sid, fname, 'success-rate-by-level', succByLvl, 'level min:max')}
+       <p class="muted small" style="margin-top:2px">e.g. <code>1 40:80</code> — level : success % range.</p>`)}`;
 }
 
 function socketItemTargetRows(sid, fname, data) {
   const tr = data['target-requirements'] ?? {};
+  const modArr = Array.isArray(tr.module) ? tr.module : (tr.module ? [String(tr.module)] : []);
   return igCollapsible('🎯 Target requirements', `
-    ${cardRow('Item types',    igJson(sid,  fname, 'target-requirements.type',   tr.type   ?? []))}
-    ${cardRow('Socket cat.',   igField(sid, fname, 'target-requirements.socket', tr.socket ?? 'default'))}
-    ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
-    ${cardRow('Modules',       igJson(sid,  fname, 'target-requirements.module', tr.module ?? ['*']))}
-    ${cardRow('Level map',     igJson(sid,  fname, 'target-requirements.level',  tr.level  ?? {}))}
+    ${cardRow('Item types', `
+      ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
+      <p class="muted small" style="margin-top:3px">WEAPON / ARMOR / * (any).</p>`)}
+    ${cardRow('Socket category', igField(sid, fname, 'target-requirements.socket', tr.socket ?? 'default'))}
+    ${cardRow('Required tier',   igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+    ${cardRow('Modules (one per line)',
+      `${igLineArray(sid, fname, 'target-requirements.module', modArr)}
+       <p class="muted small" style="margin-top:2px">Module IDs or <code>*</code> for all. Leave empty for no restriction.</p>`)}
+    ${cardRow('Level requirements',
+      `${igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'level min:max')}
+       <p class="muted small" style="margin-top:2px">e.g. <code>1 1:10</code> — gem level : allowed item level range.</p>`)}
   `, false);
 }
 
@@ -2534,16 +2658,17 @@ function renderRunes(data, sid) {
 
 /** Shared "module item" base fields (material, name, lore, visual, level). */
 function moduleItemBaseRows(sid, fname, data) {
-  const loreLines = data.lore ?? [];
+  const loreLines = Array.isArray(data.lore) ? data.lore : [];
+  const flags     = data['item-flags'] ?? [];
   return `
     ${cardRow('Material',   igField(sid, fname, 'material',   data.material   ?? 'ARROW'))}
     ${cardRow('Name',       igField(sid, fname, 'name',       data.name       ?? '', 'edit-input--format'))}
     <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data.name ?? '')}</div>
-    ${cardRow('Lore',       igJson(sid,  fname, 'lore',       loreLines))}
+    ${cardRow('Lore', igLineArray(sid, fname, 'lore', loreLines))}
     ${lorePreview(loreLines)}
     ${cardRow('Tier',       igField(sid, fname, 'tier',       data.tier       ?? 'common'))}
     ${cardRow('Enchanted',  igCheck(sid, fname, 'enchanted',  !!data.enchanted))}
-    ${cardRow('Item flags', igJson(sid,  fname, 'item-flags', data['item-flags'] ?? []))}
+    ${cardRow('Item flags', igItemFlags(sid, fname, flags))}
     ${cardRow('Unbreakable',igCheck(sid, fname, 'unbreakable',!!data.unbreakable))}
     ${cardRow('Model data', igNum(sid,   fname, 'model-data', data['model-data'] ?? -1))}
     ${cardRow('Color (R,G,B)', igField(sid, fname, 'color',  String(data.color ?? '-1,-1,-1'), 'edit-input--inline'))}
@@ -2567,9 +2692,9 @@ function renderArrowCard(sid, fname, data) {
     .sort(([a], [b]) => +a - +b)
     .map(([lvl, bonus]) => igCollapsible(
       `✨ Level ${lvl}`,
-      `${cardRow('Additional stats',   igJson(sid, fname, `bonuses-by-level.${lvl}.additional-stats`,   bonus['additional-stats']   ?? {}))}
-       ${cardRow('Additional damage',  igJson(sid, fname, `bonuses-by-level.${lvl}.additional-damage`,  bonus['additional-damage']  ?? {}))}
-       ${cardRow('Defense ignoring',   igJson(sid, fname, `bonuses-by-level.${lvl}.defense-ignoring`,   bonus['defense-ignoring']   ?? {}))}
+      `${igBonusTypeMap(sid, fname, `bonuses-by-level.${lvl}.additional-stats`,  bonus['additional-stats']  ?? {}, 'general',  'Additional Stats',   '📊')}
+       ${igBonusTypeMap(sid, fname, `bonuses-by-level.${lvl}.additional-damage`, bonus['additional-damage'] ?? {}, 'damage',   'Additional Damage',  '⚔️')}
+       ${igLineKvField(sid, fname, `bonuses-by-level.${lvl}.defense-ignoring`,   bonus['defense-ignoring']  ?? {}, 'defense_type: value')}
        <button class="btn-icon btn-del" style="margin-top:6px"
          onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses-by-level','${escJs(String(lvl))}')">🗑 Remove level</button>`,
       true)).join('');
@@ -2602,13 +2727,19 @@ function renderArrowCard(sid, fname, data) {
           ${igCollapsible('💥 On-hit actions', igJson(sid, fname, 'on-hit-actions', data['on-hit-actions'] ?? {}))}
           ${igCollapsible('🌀 On-fly actions', igJson(sid, fname, 'on-fly-actions', data['on-fly-actions'] ?? {}))}
 
-          ${igCollapsible('🎯 Target requirements', `
-            ${cardRow('Item types',    igJson(sid, fname, 'target-requirements.type',   data['target-requirements']?.type   ?? []))}
-            ${cardRow('Socket cat.',   igField(sid, fname, 'target-requirements.socket', data['target-requirements']?.socket ?? ''))}
-            ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier',   data['target-requirements']?.tier   ?? ''))}
-            ${cardRow('Modules',       igJson(sid, fname, 'target-requirements.module', data['target-requirements']?.module ?? ['*']))}
-            ${cardRow('Level map',     igJson(sid, fname, 'target-requirements.level',  data['target-requirements']?.level  ?? {}))}
-          `, false)}
+          ${igCollapsible('🎯 Target requirements', (() => {
+            const tr = data['target-requirements'] ?? {};
+            const modArr = Array.isArray(tr.module) ? tr.module : (tr.module ? [String(tr.module)] : []);
+            return `
+              ${cardRow('Item types', `
+                ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
+                <p class="muted small" style="margin-top:3px">WEAPON / ARMOR / * (any).</p>`)}
+              ${cardRow('Socket cat.',   igField(sid, fname, 'target-requirements.socket', tr.socket ?? ''))}
+              ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+              ${cardRow('Modules', igLineArray(sid, fname, 'target-requirements.module', modArr))}
+              <p class="muted small" style="margin-top:-6px;margin-bottom:4px">One module key per line, e.g. <code>bow</code>. Use <code>*</code> for any.</p>
+              ${cardRow('Level map', igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'min: max  (e.g. 1: 10)'))}`;
+          })(), false)}
         </div>
       </details>
     </div>`;
@@ -2693,15 +2824,15 @@ function renderConsumableCard(sid, fname, data) {
           `, true)}
 
           ${igCollapsible('📊 Uses & variables by level', `
-            ${cardRow('Uses by level',      igJson(sid, fname, 'uses-by-level',      usesByLvl))}
+            ${cardRow('Uses by level', igLineKvField(sid, fname, 'uses-by-level', usesByLvl, 'level: uses  (e.g. 1: 3)'))}
             ${cardRow('Variables by level', igJson(sid, fname, 'variables-by-level', varsByLvl))}
             <p class="muted small" style="margin-top:4px">Variables are accessible as <code>%varName%</code> in lore/name. Example: <code>{"1": {"health": 20}}</code></p>
           `, false)}
 
           ${igCollapsible('👤 User requirements by level', `
-            ${cardRow('Level requirements', igJson(sid, fname, 'user-requirements-by-level.level', userReqs.level ?? {}))}
-            ${cardRow('Class requirements', igJson(sid, fname, 'user-requirements-by-level.class', userReqs.class ?? {}))}
-            ${cardRow('Banned classes',     igJson(sid, fname, 'user-requirements-by-level.banned-class', userReqs['banned-class'] ?? {}))}
+            ${cardRow('Level requirements', igLineKvField(sid, fname, 'user-requirements-by-level.level',        userReqs.level ?? {},          'item_level: required_player_level'))}
+            ${cardRow('Class requirements', igLineKvField(sid, fname, 'user-requirements-by-level.class',        userReqs.class ?? {},          'item_level: ClassName'))}
+            ${cardRow('Banned classes',     igLineKvField(sid, fname, 'user-requirements-by-level.banned-class', userReqs['banned-class'] ?? {}, 'item_level: ClassName'))}
           `, false)}
 
           ${igCollapsible('🖱️ Usage (click actions)', `
@@ -2710,12 +2841,18 @@ function renderConsumableCard(sid, fname, data) {
             <p class="muted small" style="margin-top:4px">Cooldown in seconds. <code>actions</code> use Divinity action DSL.</p>
           `, false)}
 
-          ${igCollapsible('🎯 Target requirements', `
-            ${cardRow('Item types',    igJson(sid, fname, 'target-requirements.type',   data['target-requirements']?.type   ?? []))}
-            ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier',   data['target-requirements']?.tier   ?? ''))}
-            ${cardRow('Modules',       igJson(sid, fname, 'target-requirements.module', data['target-requirements']?.module ?? ['*']))}
-            ${cardRow('Level map',     igJson(sid, fname, 'target-requirements.level',  data['target-requirements']?.level  ?? {}))}
-          `, false)}
+          ${igCollapsible('🎯 Target requirements', (() => {
+            const tr = data['target-requirements'] ?? {};
+            const modArr = Array.isArray(tr.module) ? tr.module : (tr.module ? [String(tr.module)] : []);
+            return `
+              ${cardRow('Item types', `
+                ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
+                <p class="muted small" style="margin-top:3px">WEAPON / ARMOR / * (any).</p>`)}
+              ${cardRow('Required tier', igField(sid, fname, 'target-requirements.tier', tr.tier ?? ''))}
+              ${cardRow('Modules', igLineArray(sid, fname, 'target-requirements.module', modArr))}
+              <p class="muted small" style="margin-top:-6px;margin-bottom:4px">One module key per line, e.g. <code>sword</code>. Use <code>*</code> for any.</p>
+              ${cardRow('Level map', igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'min: max  (e.g. 1: 10)'))}`;
+          })(), false)}
         </div>
       </details>
     </div>`;

@@ -735,8 +735,11 @@ const APP = {
 
   /** Line-by-line textarea → string array. Empty lines are filtered out. */
   updateLineArray(sid, path, text) {
-    const arr = text.split('\n').map(s => s.trim()).filter(Boolean);
-    setPath(STATE.loaded[sid], path, arr);
+    const rows = text.split('\n').map(s => s.trim());
+    let lo = 0, hi = rows.length;
+    while (lo < hi && rows[lo]  === '') lo++;
+    while (hi > lo && rows[hi-1] === '') hi--;
+    setPath(STATE.loaded[sid], path, rows.slice(lo, hi));
   },
 
   // ---- Entry management (top-level keys) ----
@@ -969,12 +972,30 @@ const APP = {
     renderSection(_activeSection);
   },
 
-  /** Line-by-line textarea → string array for item-gen files. */
+  /** Toggle a scalar value in an array at path inside an ig file. */
+  igToggleArrayValue(sid, fname, path, value) {
+    const files = STATE.loaded[sid]?.files;
+    if (!files?.[fname]) return;
+    let arr = getPath(files[fname], path);
+    if (!Array.isArray(arr)) arr = [];
+    const idx = arr.indexOf(value);
+    if (idx === -1) arr.push(value);
+    else arr.splice(idx, 1);
+    setPath(files[fname], path, arr);
+    renderSection(_activeSection);
+  },
+
+  /** Line-by-line textarea → string array for item-gen files.
+   *  Internal blank lines (lore separators) are preserved; only leading/trailing
+   *  blank lines from the textarea are stripped. */
   igUpdateLineArray(sid, fname, path, text) {
     const files = STATE.loaded[sid]?.files;
     if (!files?.[fname]) return;
-    const arr = text.split('\n').map(s => s.trim()).filter(Boolean);
-    setPath(files[fname], path, arr);
+    const rows = text.split('\n').map(s => s.trim());
+    let lo = 0, hi = rows.length;
+    while (lo < hi && rows[lo]  === '') lo++;
+    while (hi > lo && rows[hi-1] === '') hi--;
+    setPath(files[fname], path, rows.slice(lo, hi));
   },
 
   /** Line-by-line "key value" textarea → object for item-gen files. */
@@ -1111,7 +1132,11 @@ const APP = {
     const path = `generator.bonuses.${bonusCat}`;
     const cat  = getPath(files[fname], path);
     if (!cat || typeof cat !== 'object') return;
-    if (Object.prototype.hasOwnProperty.call(cat, newKey)) return; // already exists
+    if (Object.prototype.hasOwnProperty.call(cat, newKey)) {
+      alert(`Entry "${newKey}" already exists.`);
+      renderSection(_activeSection); // reset the input field to old key
+      return;
+    }
     const reordered = {};
     Object.keys(cat).forEach(k => { reordered[k === oldKey ? newKey : k] = cat[k]; });
     setPath(files[fname], path, reordered);
@@ -1156,7 +1181,8 @@ const APP = {
   },
 
   // Drag state — readable by renderers.js for the ondragover inline check
-  _igDragging: null,
+  _igDragging:    null,
+  _igFamilyTimer: null,
 
   igToggleCollapse(sid, fname) {
     const d = STATE.loaded[sid];
@@ -1449,11 +1475,6 @@ const APP = {
     if (Object.prototype.hasOwnProperty.call(data, key)) { alert(`"${key}" already exists.`); return; }
     data[key] = JSON.parse(JSON.stringify(template));
     renderSection(_activeSection);
-  },
-
-  /** @deprecated use igSync instead */
-  igSyncLoreFormat(sid, fname, path, source, prefix) {
-    this.igSync(sid, fname, path, path.replace(/\.lore-format$/, '.list'), source, prefix);
   },
 
   /**
