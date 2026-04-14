@@ -43,6 +43,11 @@ const SECTION_SEARCH = {};
 /** Build preview state — persists across renders. */
 const BUILD_STATE = {
   playerLevel: 1,
+  baseHp: 20,
+  baseMana: 0,
+  baseManaRegen: 0,
+  defCalcDmg: 100,
+  buildTab: 'builder',
   slots: {
     weapon:  { fname: '', level: 1, gems: ['','',''], gemLevels: [1,1,1], essence: '', essenceLevel: 1, rune: '', runeLevel: 1 },
     offhand: { fname: '', level: 1, gems: ['','',''], gemLevels: [1,1,1], essence: '', essenceLevel: 1, rune: '', runeLevel: 1 },
@@ -851,6 +856,35 @@ const APP = {
 
   buildSetPlayerLevel(level) {
     BUILD_STATE.playerLevel = Math.max(1, +level || 1);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetBaseHp(value) {
+    const v = parseFloat(value);
+    BUILD_STATE.baseHp = (isNaN(v) || value === '') ? 20 : Math.max(0, v);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetBaseMana(value) {
+    const v = parseFloat(value);
+    BUILD_STATE.baseMana = (isNaN(v) || value === '') ? 0 : Math.max(0, v);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetBaseManaRegen(value) {
+    const v = parseFloat(value);
+    BUILD_STATE.baseManaRegen = (isNaN(v) || value === '') ? 0 : Math.max(0, v);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetDefCalcDmg(value) {
+    const v = parseFloat(value);
+    BUILD_STATE.defCalcDmg = (isNaN(v) || value === '') ? 100 : Math.max(0, v);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetTab(tab) {
+    BUILD_STATE.buildTab = tab;
     if (_activeSection === 'build') renderSection('build');
   },
 

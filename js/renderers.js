@@ -1012,19 +1012,35 @@ function evalFormula(formula, vars) {
 
 /**
  * Calculate damage output using the correct formula for the active mode.
- * @param {string} mode        'FACTOR' | 'CUSTOM' | 'LEGACY'
- * @param {string} customExpr  Custom formula expression (only used for CUSTOM mode)
- * @param {{damage:number, defense:number, toughness?:number}} vars
+ *
+ * FACTOR — Minecraft armor formula (DamageManager.java lines 339-356):
+ *   factorResult = max(def/5,  def - 4*dmg/(toughness+8))
+ *   finalDmg     = max(0, dmg * (1 - factorResult * protectionFactor * 0.05))
+ *   Uses ONLY the single highest-priority attached defense; pf from defense.yml.
+ *
+ * CUSTOM — user formula evaluated via evalFormula(); all matching defenses summed first.
+ *   Default: damage*(25/(25+defense))
+ *   Variables: damage, defense (sum), toughness, defense_<id> (individual values).
+ *
+ * LEGACY — flat subtraction: max(0, damage - defense).
+ *
+ * @param {string} mode
+ * @param {string} customExpr
+ * @param {{damage:number, defense:number, toughness?:number, protectionFactor?:number}} vars
  * @returns {number|null}
  */
 function evalForMode(mode, customExpr, vars) {
   if (mode === 'LEGACY') {
-    // Legacy: simple 1:1 subtraction, minimum 0
     return Math.max(0, vars.damage - vars.defense);
   }
   if (mode === 'FACTOR') {
-    // Divinity default factor formula (Minecraft-like diminishing returns)
-    return evalFormula('damage*(25/(25+defense))', vars);
+    const dmg = vars.damage || 0;
+    const def = vars.defense || 0;
+    const toughness = vars.toughness || 0;
+    const pf = vars.protectionFactor ?? 1.0;
+    if (def <= 0) return dmg;
+    const factorResult = Math.max(def / 5, def - 4 * dmg / (toughness + 8));
+    return Math.max(0, dmg * (1 - factorResult * pf * 0.05));
   }
   // CUSTOM: user-defined expression
   return evalFormula(customExpr, vars);
@@ -3276,10 +3292,10 @@ function calcBuild() {
       totalStats[stat] = (totalStats[stat] || 0) + avg;
     }
 
-    // Fabled attributes — accumulate raw avg points per attribute
+    // Fabled attributes — accumulate scaled avg points per attribute
     for (const [attr, info] of Object.entries(gen['fabled-attributes']?.list || {})) {
       if (typeof info !== 'object' || (info.chance ?? 100) <= 0) continue;
-      const avg = ((info.min ?? 0) + (info.max ?? 0)) / 2;
+      const avg = _buildScale(((info.min ?? 0) + (info.max ?? 0)) / 2, info['scale-by-level'], level);
       totalFabledAttrs[attr] = (totalFabledAttrs[attr] || 0) + avg;
     }
 
@@ -3302,17 +3318,54 @@ function calcBuild() {
     }
   }
 
-  // Evaluate Fabled Attribute stat formulas → contribute to totalStats
+  // Evaluate Fabled Attribute stat formulas — keep separate from item totalStats
+  const faStatContributions = {};   // statId → total from all FA formulas
+  const faAttrBreakdown     = {};   // attr_key → { pts, stats, dispName, noDefMsg }
   const faAttrDefs = STATE.loaded?.fabledAttributes;
-  if (faAttrDefs && typeof faAttrDefs === 'object') {
-    for (const [attr, pts] of Object.entries(totalFabledAttrs)) {
-      const attrDef = faAttrDefs[attr];
-      if (!attrDef?.stats || typeof attrDef.stats !== 'object') continue;
-      for (const [statId, formula] of Object.entries(attrDef.stats)) {
-        const val = evalFaFormula(String(formula ?? 'a'), pts);
-        if (val !== 0) totalStats[statId] = (totalStats[statId] || 0) + val;
+  const faDefsLoaded = faAttrDefs != null && typeof faAttrDefs === 'object';
+
+  // Case-insensitive lookup: item generator may use 'stamina', FA section may store 'Stamina'
+  function _faLookup(key) {
+    if (!faDefsLoaded) return undefined;
+    if (faAttrDefs[key] !== undefined) return faAttrDefs[key];
+    const lower = key.toLowerCase();
+    for (const [k, v] of Object.entries(faAttrDefs)) {
+      if (k.toLowerCase() === lower) return v;
+    }
+    return undefined;
+  }
+
+  // Always populate breakdown for every accumulated attr (even if fabledAttributes not loaded)
+  for (const [attr, pts] of Object.entries(totalFabledAttrs)) {
+    const attrStats = {};
+    const attrDef   = _faLookup(attr);
+    let   noDefMsg  = '';   // diagnostic string shown in FA card when stats are empty
+
+    if (!faDefsLoaded) {
+      noDefMsg = 'Load ⭐ Fabled Attributes section for stat contributions';
+    } else if (!attrDef) {
+      noDefMsg = `"${attr}" not found in Fabled Attributes section`;
+    } else {
+      const rawStats = attrDef.stats;
+      const statsObj = rawStats && typeof rawStats === 'object' && !Array.isArray(rawStats) ? rawStats : {};
+      const statEntries = Object.entries(statsObj);
+      if (statEntries.length === 0) {
+        noDefMsg = 'no stats defined for this attribute';
+      } else {
+        for (const [statId, formula] of statEntries) {
+          const val = evalFaFormula(String(formula ?? 'a'), pts);
+          if (isFinite(val) && val !== 0) {
+            faStatContributions[statId] = (faStatContributions[statId] || 0) + val;
+            attrStats[statId] = (attrStats[statId] || 0) + val;
+          }
+        }
+        if (Object.keys(attrStats).length === 0) {
+          noDefMsg = 'all formulas returned 0 at this level';
+        }
       }
     }
+
+    faAttrBreakdown[attr] = { pts, stats: attrStats, dispName: attrDef?.display ?? '', noDefMsg };
   }
 
   // Set detection
@@ -3347,7 +3400,7 @@ function calcBuild() {
     }
   }
 
-  return { totalDmg, totalDef, totalStats, totalFabledAttrs, totalSkills, activeSets };
+  return { totalDmg, totalDef, totalStats, totalFabledAttrs, faStatContributions, faAttrBreakdown, totalSkills, activeSets };
 }
 
 function renderBuildPreview(_data, _sid) {
@@ -3356,7 +3409,9 @@ function renderBuildPreview(_data, _sid) {
   const essFiles  = Object.keys(STATE.loaded?.essences?.files   || {});
   const runeFiles = Object.keys(STATE.loaded?.runes?.files      || {});
 
-  const { totalDmg, totalDef, totalStats, totalFabledAttrs, totalSkills, activeSets } = calcBuild();
+  const activeTab = BUILD_STATE.buildTab ?? 'builder';
+
+  const { totalDmg, totalDef, totalStats, totalFabledAttrs, faStatContributions, faAttrBreakdown, totalSkills, activeSets } = calcBuild();
 
   // ---- Equipment slots ----
   const slotsHtml = BUILD_SLOTS.map(slotDef => {
@@ -3449,7 +3504,7 @@ function renderBuildPreview(_data, _sid) {
       </div>`;
   }).join('');
 
-  // ---- Summary tables ----
+  // ---- Summary helpers ----
   function statTable(entries, color) {
     if (!entries.length) return `<tr><td colspan="2" class="muted small" style="padding:4px">—</td></tr>`;
     return entries.map(([k, v]) =>
@@ -3458,80 +3513,153 @@ function renderBuildPreview(_data, _sid) {
     ).join('');
   }
 
+  // Format a number neatly (trim trailing zeros after decimal)
+  function fmtN(v) {
+    if (!isFinite(v)) return '?';
+    const s = v.toFixed(3);
+    return s.replace(/\.?0+$/, '') || '0';
+  }
+
   const dmgEntries   = Object.entries(totalDmg);
   const defEntries   = Object.entries(totalDef);
-  const statEntries  = Object.entries(totalStats);
-  const faEntries    = Object.entries(totalFabledAttrs);
   const skillEntries = Object.entries(totalSkills);
 
-  // ---- Combat estimate ----
-  const totalDmgSum = dmgEntries.reduce((s, [,v]) => s + v, 0);
-  const totalDefSum = defEntries.reduce((s, [,v]) => s + v, 0);
-  const formulaData = STATE.loaded?.formula;
-  const mode        = formulaData?.['defense-formula'] ?? 'FACTOR';
-  const customExpr  = formulaData?.['custom-defense-formula'] ?? '';
+  // ---- Merged Item Stats + FA contributions ----
+  // HP/Mana-related stats go to their own summary cards, not the stat table
+  const HP_STAT_IDS   = new Set(['max_health', 'MAX_HEALTH', 'health', 'absorption']);
+  const MANA_STAT_IDS = new Set(['mana', 'max_mana', 'mana_regen', 'mana-regen', 'MANA', 'MAX_MANA', 'MANA_REGEN']);
+  const EXCLUDED_IDS  = new Set([...HP_STAT_IDS, ...MANA_STAT_IDS]);
+  const allStatIds = new Set(
+    [...Object.keys(totalStats), ...Object.keys(faStatContributions)]
+      .filter(id => !EXCLUDED_IDS.has(id))
+  );
+  const mergedStatRows = [...allStatIds].sort().map(id => {
+    const itemVal = totalStats[id]           || 0;
+    const faVal   = faStatContributions[id]  || 0;
+    const total   = itemVal + faVal;
+    if (total === 0) return '';
+    const hasBoth = itemVal !== 0 && faVal !== 0;
+    const faOnly  = itemVal === 0 && faVal  !== 0;
+    const color   = (hasBoth || faOnly) ? '#e8c87a' : '#af8';
+    const suffix  = hasBoth
+      ? ` <span class="muted" style="font-size:10px">(${fmtN(itemVal)} item)</span>`
+      : faOnly
+      ? ` <span class="muted" style="font-size:10px">(FA)</span>`
+      : '';
+    return `<tr>
+      <td style="padding:2px 4px">${esc(id)}</td>
+      <td style="padding:2px 4px;text-align:right;color:${color}">${fmtN(total)}${suffix}</td>
+    </tr>`;
+  }).filter(Boolean).join('') || `<tr><td colspan="2" class="muted small" style="padding:4px">—</td></tr>`;
 
-  // Formula label — show expression snippet when CUSTOM
-  const formulaLabel = mode === 'CUSTOM' && customExpr
-    ? `${esc(mode)}: <code style="font-size:10px;opacity:.75">${esc(customExpr.length > 50 ? customExpr.slice(0,50)+'…' : customExpr)}</code>`
-    : `<b>${esc(mode)}</b>`;
-
-  // Per-defense-type: reduction at 100 incoming damage
-  const defReductionRows = defEntries
-    .filter(([,v]) => v > 0)
-    .map(([type, defVal]) => {
-      const out = evalForMode(mode, customExpr, { damage: 100, defense: defVal });
-      const pct = out !== null ? ((1 - out / 100) * 100) : null;
-      const clr = pct !== null && pct >= 50 ? '#af8' : pct !== null && pct >= 25 ? '#fa8' : '#f88';
+  // ---- Fabled Attributes breakdown — per attr: stat contributions ----
+  const faBreakdownRows = Object.entries(faAttrBreakdown).map(([attr, { pts, stats, dispName, noDefMsg }]) => {
+    const label    = dispName && dispName !== attr
+      ? `<b>[${esc(attr)}]</b> <span class="muted small">${esc(dispName)}</span>`
+      : `<b>[${esc(attr)}]</b>`;
+    const statLines = Object.entries(stats).map(([statId, val]) => {
+      const sign = val >= 0 ? '+' : '';
       return `<tr>
-        <td style="padding:2px 6px">${esc(type)}</td>
-        <td style="padding:2px 6px;text-align:right;color:#8af">${defVal.toFixed(1)}</td>
-        <td style="padding:2px 6px;text-align:right;color:#f88">${out !== null ? out.toFixed(1) : '?'}</td>
-        <td style="padding:2px 6px;text-align:right;color:${clr}">${pct !== null ? pct.toFixed(1)+'%' : '?'}</td>
+        <td style="padding:1px 16px;color:#bbb;font-size:11px">${esc(statId)}</td>
+        <td style="padding:1px 4px;text-align:right;color:#da8;font-size:11px">${sign}${fmtN(val)}</td>
       </tr>`;
-    }).join('');
+    }).join('') || `<tr><td colspan="2" style="padding:1px 16px;font-size:10px;color:#888;font-style:italic">${esc(noDefMsg)}</td></tr>`;
+    return `
+      <tr style="border-top:1px solid #2a2a2a">
+        <td colspan="2" style="padding:5px 4px 1px">${label}
+          <span class="muted small" style="margin-left:6px">${fmtN(pts)} pts avg</span>
+        </td>
+      </tr>
+      ${statLines}`;
+  }).join('') || `<tr><td colspan="2" class="muted small" style="padding:4px">No Fabled Attributes on equipped items.</td></tr>`;
 
-  // Total damage vs hypothetical defense values
-  let combatHtml = '';
-  if (totalDmgSum > 0 || defEntries.length > 0) {
-    const testDefs = totalDmgSum > 0 ? [0, 25, 50, 100, 200] : [];
-    const dmgRows = testDefs.map(def => {
-      const out = evalForMode(mode, customExpr, { damage: totalDmgSum, defense: def });
-      const pct = out !== null ? ((1 - out / totalDmgSum) * 100) : null;
-      return `<tr>
-        <td style="padding:2px 8px">def ${def}</td>
-        <td style="padding:2px 8px;text-align:right;color:#f88">${out !== null ? out.toFixed(1) : '?'} dmg</td>
-        <td style="padding:2px 8px;text-align:right;color:#af8">${pct !== null ? pct.toFixed(1)+'% red.' : ''}</td>
-      </tr>`;
-    }).join('');
+  // ---- HP summary — reads both Fabled and Divinity stat systems ----
+  const BASE_HP = BUILD_STATE.baseHp ?? 20;
 
-    combatHtml = `
-      <div class="build-card" style="margin-top:12px">
-        <div class="build-card__title">⚡ Combat Estimate — formula: ${formulaLabel}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <span class="badge badge-red">Total dmg: ${totalDmgSum.toFixed(1)}</span>
-          <span class="badge badge-blue">Total def: ${totalDefSum.toFixed(1)}</span>
-        </div>
+  // Fabled native stats
+  const faHealth     = faStatContributions['health']     || 0;  // Fabled: health
+  const faAbsorption = faStatContributions['absorption'] || 0;  // Fabled 1.21+: absorption
 
-        ${defReductionRows ? `
-        <div style="font-size:11px;font-weight:700;color:#8af;margin:6px 0 3px">🛡️ Defense reduction at 100 dmg input</div>
-        <table style="font-size:12px;width:100%">
-          <thead><tr style="color:#666;font-size:10px">
-            <th style="text-align:left;padding:1px 6px">Type</th>
-            <th style="text-align:right;padding:1px 6px">Def val</th>
-            <th style="text-align:right;padding:1px 6px">Dmg out</th>
-            <th style="text-align:right;padding:1px 6px">Reduction</th>
-          </tr></thead>
-          <tbody>${defReductionRows}</tbody>
-        </table>` : ''}
+  // Divinity MAX_HEALTH — from item stats AND from FA formula contributions
+  const itemMaxHp = totalStats['max_health']          || totalStats['MAX_HEALTH']          || 0;
+  const faMaxHp   = faStatContributions['max_health'] || faStatContributions['MAX_HEALTH'] || 0;
 
-        ${dmgRows ? `
-        <div style="font-size:11px;font-weight:700;color:#f88;margin:8px 0 3px">⚔️ Total build dmg vs hypothetical defense</div>
-        <table style="font-size:12px"><tbody>${dmgRows}</tbody></table>` : ''}
+  const totalHP = BASE_HP + faHealth + faAbsorption + faMaxHp + itemMaxHp;
 
-        <p class="muted small" style="margin-top:6px">Averages only — actual rolls vary. Gem/set bonuses included.</p>
-      </div>`;
+  function hpRow(label, system, val, color) {
+    return val ? `<tr>
+      <td style="padding:2px 6px;color:#aaa">${label} <code style="font-size:10px;color:#666">${system}</code></td>
+      <td style="padding:2px 6px;text-align:right;color:${color}">${val > 0 ? '+' : ''}${fmtN(val)}</td>
+    </tr>` : '';
   }
+
+  const hpRows = [
+    `<tr><td style="padding:2px 6px;color:#aaa">⬜ Base</td><td style="padding:2px 6px;text-align:right;color:#f88">${BASE_HP}</td></tr>`,
+    hpRow('⭐ Fabled',  'health',     faHealth,     '#da8'),
+    hpRow('⭐ Fabled',  'absorption', faAbsorption, '#da8'),
+    hpRow('⭐ FA stat', 'MAX_HEALTH', faMaxHp,      '#da8'),
+    hpRow('📦 Divinity','max_health', itemMaxHp,    '#af8'),
+    `<tr style="border-top:1px solid #444">
+      <td style="padding:4px 6px;font-weight:700">❤ Total HP</td>
+      <td style="padding:4px 6px;text-align:right;font-weight:700;font-size:15px;color:#f44">${totalHP.toFixed(1)}</td>
+    </tr>`,
+  ].filter(Boolean).join('');
+
+  // ---- Mana summary ----
+  const BASE_MANA      = BUILD_STATE.baseMana      ?? 0;
+  const BASE_MANA_REGEN= BUILD_STATE.baseManaRegen ?? 0;
+
+  const itemMana     = totalStats['mana']      || totalStats['max_mana']  || totalStats['MANA']      || 0;
+  const itemManaRegen= totalStats['mana_regen']|| totalStats['mana-regen']|| totalStats['MANA_REGEN']|| 0;
+  const faMana      = faStatContributions['mana']       || faStatContributions['max_mana']   || 0;
+  const faManaRegen = faStatContributions['mana-regen'] || faStatContributions['mana_regen'] || 0;
+
+  const totalMana      = BASE_MANA      + itemMana      + faMana;
+  const totalManaRegen = BASE_MANA_REGEN+ itemManaRegen + faManaRegen;
+
+  function manaRow(label, system, val, color) {
+    return val ? `<tr>
+      <td style="padding:2px 6px;color:#aaa">${label} <code style="font-size:10px;color:#666">${system}</code></td>
+      <td style="padding:2px 6px;text-align:right;color:${color}">${val > 0 ? '+' : ''}${fmtN(val)}</td>
+    </tr>` : '';
+  }
+
+  const manaRows = [
+    `<tr><td style="padding:2px 6px;color:#aaa">⬜ Base</td><td style="padding:2px 6px;text-align:right;color:#88f">${BASE_MANA}</td></tr>`,
+    manaRow('⭐ FA',      'mana',      faMana,      '#da8'),
+    manaRow('📦 Divinity','mana',      itemMana,    '#8af'),
+    `<tr style="border-top:1px solid #444">
+      <td style="padding:4px 6px;font-weight:700">🔮 Total Mana</td>
+      <td style="padding:4px 6px;text-align:right;font-weight:700;font-size:15px;color:#88f">${totalMana.toFixed(1)}</td>
+    </tr>`,
+  ].filter(Boolean).join('');
+
+  const manaRegenRows = [
+    `<tr><td style="padding:2px 6px;color:#aaa">⬜ Base /s</td><td style="padding:2px 6px;text-align:right;color:#aaf">${BASE_MANA_REGEN}</td></tr>`,
+    manaRow('⭐ FA',       'mana-regen', faManaRegen,   '#da8'),
+    manaRow('📦 Divinity', 'mana_regen', itemManaRegen, '#8af'),
+    `<tr style="border-top:1px solid #444">
+      <td style="padding:4px 6px;font-weight:700">⚡ Total Regen/s</td>
+      <td style="padding:4px 6px;text-align:right;font-weight:700;font-size:15px;color:#aaf">${totalManaRegen.toFixed(2)}</td>
+    </tr>`,
+  ].filter(Boolean).join('');
+
+  // ---- Formula / mode — used by both tabs ----
+  const formulaData   = STATE.loaded?.formula;
+  const formulaCombat = (formulaData?.combat || formulaData) ?? {};
+  const mode          = String(formulaCombat['defense-formula'] ?? 'FACTOR').toUpperCase();
+  const customExpr    = formulaCombat['custom-defense-formula'] ?? '';
+
+  const defTypeCfg = STATE.loaded?.defense ?? {};
+  const defbuffCfg = STATE.loaded?.defbuff ?? {};
+
+  // PvE/PvP defense mod — multiplicative on raw defense (pick higher)
+  const pveDefPct = totalStats['pve_defense'] || 0;
+  const pvpDefPct = totalStats['pvp_defense'] || 0;
+  const pveDefMod = 1 + Math.max(pveDefPct, pvpDefPct) / 100;
+
+  // Armor toughness (FACTOR formula denominator)
+  const toughness = totalStats['armor_toughness'] || 0;
 
   // ---- Active sets ----
   const setsHtml = activeSets.length
@@ -3549,20 +3677,308 @@ function renderBuildPreview(_data, _sid) {
     ? `<div class="alert alert-warn" style="margin-bottom:16px">⚠️ No item generator files loaded — go to <b>Load Files</b> first.</div>`
     : '';
 
+  // ---- Tab buttons ----
+  const tabButtons = `
+    <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:2px solid #2a2a2a;padding-bottom:0">
+      <button onclick="APP.buildSetTab('builder')"
+        style="padding:6px 18px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;font-weight:600;
+               background:${activeTab==='builder'?'#1e3a2f':'#1a1a1a'};
+               color:${activeTab==='builder'?'#7fca9a':'#666'};
+               border-bottom:${activeTab==='builder'?'2px solid #7fca9a':'2px solid transparent'};
+               margin-bottom:-2px">🔧 Builder</button>
+      <button onclick="APP.buildSetTab('combat')"
+        style="padding:6px 18px;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;font-weight:600;
+               background:${activeTab==='combat'?'#3a1e1e':'#1a1a1a'};
+               color:${activeTab==='combat'?'#f88':'#666'};
+               border-bottom:${activeTab==='combat'?'2px solid #f88':'2px solid transparent'};
+               margin-bottom:-2px">⚔️ Combat Test</button>
+    </div>`;
+
+  // =========================================================================
+  // COMBAT TEST TAB
+  // =========================================================================
+  if (activeTab === 'combat') {
+    const defCfgLoaded = Object.keys(defTypeCfg).length > 0;
+
+    // For each damage type, find which defense types block it
+    const dmgEntryPos = dmgEntries.filter(([, v]) => v > 0);
+    const defEntryPos2 = defEntries.filter(([, v]) => v > 0);
+
+    // Build damage rows: dmgId → { avgDmg, blockingDefs: [[defId, rawVal], ...] }
+    const dmgRows2 = dmgEntryPos.map(([dmgId, avgDmg]) => {
+      const blockingDefs = defEntryPos2.filter(([defId]) => {
+        const cfg = defTypeCfg[defId] ?? {};
+        return Array.isArray(cfg['block-damage-types']) && cfg['block-damage-types'].includes(dmgId);
+      });
+      return { dmgId, avgDmg, blockingDefs };
+    });
+
+    const resisted   = dmgRows2.filter(r => r.blockingDefs.length > 0);
+    const unresisted = dmgRows2.filter(r => r.blockingDefs.length === 0 && r.avgDmg > 0);
+
+    // ---- Attack analysis table ----
+    let attackTableHtml = '';
+    if (!dmgEntryPos.length) {
+      attackTableHtml = `<p class="muted small">No damage types on equipped items.</p>`;
+    } else if (!defCfgLoaded) {
+      attackTableHtml = `<p class="muted small" style="color:#fa8">⚠️ Load the Defense Types section to see combat calculations.</p>`;
+    } else if (!resisted.length) {
+      attackTableHtml = `<p class="muted small" style="color:#fa8">⚠️ No defense types loaded that block your damage types.</p>`;
+    } else if (mode === 'FACTOR') {
+      // FACTOR: each damage type has ONE attached defense (first block-damage-types match)
+      // Defense buff uses defense type ID (FACTOR mode per DamageManager.java line 344)
+      let rows = '';
+      let totalAvgDmg = 0, totalDmgOut = 0;
+      for (const { dmgId, avgDmg, blockingDefs } of resisted) {
+        // Use first matching defense type (attached defense, 1:1)
+        const [defId, rawDefVal] = blockingDefs[0];
+        const defCfg     = defTypeCfg[defId] ?? {};
+        const protFactor = +(defCfg['protection-factor'] ?? 1.0);
+        // FACTOR: defense buff keyed on defense type ID
+        const defBuffPct = totalStats[`DEFENSE_BUFF_${defId.toUpperCase()}`] || 0;
+        const effDef     = rawDefVal * pveDefMod * (1 + defBuffPct / 100);
+        const dmgOut     = evalForMode('FACTOR', '', { damage: avgDmg, defense: effDef, toughness, protectionFactor: protFactor });
+        const pctRed     = avgDmg > 0 ? (1 - dmgOut / avgDmg) * 100 : 0;
+        const clr        = pctRed >= 50 ? '#af8' : pctRed >= 25 ? '#fa8' : '#f88';
+        const pfClr      = protFactor < 1 ? '#fa8' : '#888';
+        totalAvgDmg += avgDmg;
+        totalDmgOut += dmgOut;
+        rows += `<tr>
+          <td style="padding:3px 7px;font-weight:600;color:#f8c">${esc(dmgId)}</td>
+          <td style="padding:3px 7px;text-align:right;color:#f88">${fmtN(avgDmg)}</td>
+          <td style="padding:3px 7px;color:#8af">${esc(defId)}</td>
+          <td style="padding:3px 7px;text-align:right;color:${pfClr}">${protFactor.toFixed(2)}</td>
+          <td style="padding:3px 7px;text-align:right;color:#8af">${fmtN(rawDefVal)}</td>
+          <td style="padding:3px 7px;text-align:right;color:#adf">${fmtN(effDef)}</td>
+          <td style="padding:3px 7px;text-align:right;color:#f88">${dmgOut.toFixed(2)}</td>
+          <td style="padding:3px 7px;text-align:right;color:${clr};font-weight:700">${pctRed.toFixed(1)}%</td>
+        </tr>`;
+      }
+      const totalPct = totalAvgDmg > 0 ? (1 - totalDmgOut / totalAvgDmg) * 100 : 0;
+      const totalClr = totalPct >= 50 ? '#af8' : totalPct >= 25 ? '#fa8' : '#f88';
+      rows += `<tr style="border-top:2px solid #333;background:#1a1a1a">
+        <td colspan="2" style="padding:4px 7px;font-weight:700;color:#aaa">Total</td>
+        <td colspan="3" style="padding:4px 7px"></td>
+        <td style="padding:4px 7px;text-align:right"></td>
+        <td style="padding:4px 7px;text-align:right;font-weight:700;color:#f88">${totalDmgOut.toFixed(2)}</td>
+        <td style="padding:4px 7px;text-align:right;font-weight:700;color:${totalClr}">${totalPct.toFixed(1)}%</td>
+      </tr>`;
+      attackTableHtml = `
+        <table style="font-size:12px;width:100%;border-collapse:collapse">
+          <thead><tr style="color:#555;font-size:10px;border-bottom:1px solid #333;background:#111">
+            <th style="text-align:left;padding:2px 7px">Dmg Type</th>
+            <th style="text-align:right;padding:2px 7px">Avg Dmg</th>
+            <th style="text-align:left;padding:2px 7px">Def Type</th>
+            <th style="text-align:right;padding:2px 7px">Prot.F</th>
+            <th style="text-align:right;padding:2px 7px">Raw Def</th>
+            <th style="text-align:right;padding:2px 7px">Eff. Def</th>
+            <th style="text-align:right;padding:2px 7px">Dmg Out</th>
+            <th style="text-align:right;padding:2px 7px">% Red.</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    } else {
+      // CUSTOM: for each damage type, sum ALL blocking defenses, then one formula call
+      // Defense buff keyed on damage type ID (CUSTOM mode per DamageManager.java line 319)
+      let rows = '';
+      let totalAvgDmg = 0, totalDmgOut = 0;
+      for (const { dmgId, avgDmg, blockingDefs } of resisted) {
+        let combinedDef = 0;
+        const contribs = [];
+        for (const [defId, rawDefVal] of blockingDefs) {
+          const defCfg     = defTypeCfg[defId] ?? {};
+          const protFactor = +(defCfg['protection-factor'] ?? 1.0);
+          const contrib    = rawDefVal * pveDefMod * protFactor;
+          combinedDef += contrib;
+          contribs.push({ defId, rawDefVal, protFactor, contrib });
+        }
+        // CUSTOM: defense buff uses damage type ID
+        const defBuffPct = totalStats[`DEFENSE_BUFF_${dmgId.toUpperCase()}`] || 0;
+        if (defBuffPct !== 0) combinedDef *= (1 + defBuffPct / 100);
+        const dmgOut = evalForMode('CUSTOM', customExpr, { damage: avgDmg, defense: combinedDef, toughness }) ?? 0;
+        const pctRed = avgDmg > 0 ? (1 - dmgOut / avgDmg) * 100 : 0;
+        const clr    = pctRed >= 50 ? '#af8' : pctRed >= 25 ? '#fa8' : '#f88';
+        const contribDetail = contribs.map(c =>
+          `<span style="color:#888">${esc(c.defId)}</span>: <span style="color:#8af">${fmtN(c.rawDefVal)}</span> × ${c.protFactor.toFixed(2)} = <span style="color:#adf">${fmtN(c.contrib)}</span>`
+        ).join('<br>');
+        totalAvgDmg += avgDmg;
+        totalDmgOut += dmgOut;
+        rows += `<tr>
+          <td style="padding:3px 7px;font-weight:600;color:#f8c;vertical-align:top">${esc(dmgId)}</td>
+          <td style="padding:3px 7px;text-align:right;vertical-align:top;color:#f88">${fmtN(avgDmg)}</td>
+          <td style="padding:3px 7px;font-size:10px;line-height:1.6">${contribDetail}</td>
+          <td style="padding:3px 7px;text-align:right;vertical-align:top;color:#adf">${fmtN(combinedDef)}</td>
+          <td style="padding:3px 7px;text-align:right;vertical-align:top;color:#f88">${dmgOut.toFixed(2)}</td>
+          <td style="padding:3px 7px;text-align:right;vertical-align:top;color:${clr};font-weight:700">${pctRed.toFixed(1)}%</td>
+        </tr>`;
+      }
+      const totalPct = totalAvgDmg > 0 ? (1 - totalDmgOut / totalAvgDmg) * 100 : 0;
+      const totalClr = totalPct >= 50 ? '#af8' : totalPct >= 25 ? '#fa8' : '#f88';
+      rows += `<tr style="border-top:2px solid #333;background:#1a1a1a">
+        <td colspan="3" style="padding:4px 7px;font-weight:700;color:#aaa">Total</td>
+        <td style="padding:4px 7px;text-align:right"></td>
+        <td style="padding:4px 7px;text-align:right;font-weight:700;color:#f88">${totalDmgOut.toFixed(2)}</td>
+        <td style="padding:4px 7px;text-align:right;font-weight:700;color:${totalClr}">${totalPct.toFixed(1)}%</td>
+      </tr>`;
+      attackTableHtml = `
+        <table style="font-size:12px;width:100%;border-collapse:collapse">
+          <thead><tr style="color:#555;font-size:10px;border-bottom:1px solid #333;background:#111">
+            <th style="text-align:left;padding:2px 7px">Dmg Type</th>
+            <th style="text-align:right;padding:2px 7px">Avg Dmg</th>
+            <th style="text-align:left;padding:2px 7px">Blocking Defenses (raw × P.F = contrib)</th>
+            <th style="text-align:right;padding:2px 7px">Combined Def</th>
+            <th style="text-align:right;padding:2px 7px">Dmg Out</th>
+            <th style="text-align:right;padding:2px 7px">% Red.</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    // ---- Defense types breakdown ----
+    let defBreakdownHtml = '';
+    if (defEntryPos2.length) {
+      const defRows = defEntryPos2.map(([defId, rawVal]) => {
+        const cfg        = defTypeCfg[defId] ?? {};
+        const protFactor = +(cfg['protection-factor'] ?? 1.0);
+        const blocks     = (cfg['block-damage-types'] ?? []).join(', ') || '—';
+        // Eff def uses pveDefMod only (no attacker pen in this view)
+        const effDef     = rawVal * pveDefMod;
+        const pfClr      = protFactor < 1 ? '#fa8' : '#888';
+        return `<tr>
+          <td style="padding:2px 7px;color:#8af">${esc(defId)}</td>
+          <td style="padding:2px 7px;text-align:right;color:#8af">${fmtN(rawVal)}</td>
+          <td style="padding:2px 7px;text-align:right;color:${pfClr}">${protFactor.toFixed(2)}</td>
+          <td style="padding:2px 7px;color:#888;font-size:10px">${esc(blocks)}</td>
+          <td style="padding:2px 7px;text-align:right;color:#adf">${fmtN(effDef)}</td>
+        </tr>`;
+      }).join('');
+      defBreakdownHtml = `
+        <div style="font-size:12px;font-weight:700;color:#8af;margin:14px 0 5px">🛡️ Defense Types in Build</div>
+        <table style="font-size:12px;width:100%;border-collapse:collapse">
+          <thead><tr style="color:#555;font-size:10px;border-bottom:1px solid #333;background:#111">
+            <th style="text-align:left;padding:2px 7px">Type</th>
+            <th style="text-align:right;padding:2px 7px">Raw Def</th>
+            <th style="text-align:right;padding:2px 7px">Prot.F</th>
+            <th style="text-align:left;padding:2px 7px">Blocks Damage Types</th>
+            <th style="text-align:right;padding:2px 7px">Eff. Def (×PvE mod)</th>
+          </tr></thead>
+          <tbody>${defRows}</tbody>
+        </table>`;
+    }
+
+    // ---- Unresisted warning ----
+    const unresistedWarn = unresisted.length
+      ? `<div style="margin-top:10px;padding:6px 10px;background:#2a1a0a;border-radius:5px;font-size:11px;color:#fa8">
+           ⚠️ <b>No defense blocks:</b> ${unresisted.map(r => `<b>${esc(r.dmgId)}</b> (${fmtN(r.avgDmg)} dmg — passes unresisted)`).join(', ')}
+         </div>`
+      : '';
+
+    // ---- Reverse: hypothetical attacker vs your defense ----
+    let hypotheticalHtml = '';
+    if (defEntryPos2.length) {
+      const testAtks = [50, 100, 200, 500, 1000];
+      let hypRows = '';
+      for (const [defId, rawVal] of defEntryPos2) {
+        const cfg        = defTypeCfg[defId] ?? {};
+        const protFactor = +(cfg['protection-factor'] ?? 1.0);
+        const blocksTypes = cfg['block-damage-types'] ?? [];
+        // In CUSTOM mode sum only this one def (as standalone); in FACTOR 1:1
+        const defBuffPct = mode === 'FACTOR'
+          ? (totalStats[`DEFENSE_BUFF_${defId.toUpperCase()}`] || 0)
+          : (blocksTypes.length > 0 ? (totalStats[`DEFENSE_BUFF_${blocksTypes[0].toUpperCase()}`] || 0) : 0);
+        const effDef = rawVal * pveDefMod * (1 + defBuffPct / 100);
+
+        const cells = testAtks.map(atk => {
+          const dmgOut = mode === 'FACTOR'
+            ? evalForMode('FACTOR', '', { damage: atk, defense: effDef, toughness, protectionFactor: protFactor })
+            : evalForMode('CUSTOM', customExpr, { damage: atk, defense: effDef * protFactor, toughness });
+          const pct = atk > 0 ? (1 - dmgOut / atk) * 100 : 0;
+          const clr = pct >= 50 ? '#af8' : pct >= 25 ? '#fa8' : '#f88';
+          return `<td style="padding:2px 6px;text-align:right;color:#f88">${dmgOut.toFixed(1)}</td>
+                  <td style="padding:2px 6px;text-align:right;color:${clr};font-size:10px">${pct.toFixed(0)}%</td>`;
+        }).join('');
+        hypRows += `<tr>
+          <td style="padding:2px 7px;color:#8af;font-weight:600">${esc(defId)}</td>
+          ${cells}
+        </tr>`;
+      }
+      hypotheticalHtml = `
+        <div style="font-size:12px;font-weight:700;color:#8af;margin:16px 0 5px">📊 Your Defense vs Hypothetical Attacker</div>
+        <div class="muted small" style="margin-bottom:5px">How much damage passes through each of your defense types at different attacker values.</div>
+        <div style="overflow-x:auto">
+        <table style="font-size:11px;width:100%;border-collapse:collapse;white-space:nowrap">
+          <thead><tr style="color:#555;font-size:10px;border-bottom:1px solid #333;background:#111">
+            <th style="text-align:left;padding:2px 7px">Def Type</th>
+            ${testAtks.map(a => `<th colspan="2" style="text-align:center;padding:2px 6px">Atk ${a}</th>`).join('')}
+          </tr></thead>
+          <tbody>${hypRows}</tbody>
+        </table>
+        </div>`;
+    }
+
+    const combatModeInfo = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <span class="badge badge-blue" style="font-size:13px">Formula: ${esc(mode)}</span>
+        ${mode === 'CUSTOM' && customExpr ? `<code style="font-size:11px;color:#8af;background:#111;padding:2px 6px;border-radius:3px">${esc(customExpr)}</code>` : ''}
+        ${pveDefMod > 1 ? `<span class="badge" style="background:#1a3a2a">PvE/PvP Def ×${pveDefMod.toFixed(3)}</span>` : ''}
+        ${toughness > 0 ? `<span class="badge" style="background:#2a2a1a">Toughness: ${fmtN(toughness)}</span>` : ''}
+        <span class="muted small">Averages only — actual rolls vary.</span>
+      </div>`;
+
+    return `
+      ${noIgWarn}
+      ${tabButtons}
+      <div style="max-width:900px">
+        ${combatModeInfo}
+        <div style="font-size:13px;font-weight:700;color:#f88;margin-bottom:6px">⚔️ Your Damage Types — reduced by build's defense</div>
+        ${attackTableHtml}
+        ${unresistedWarn}
+        ${defBreakdownHtml}
+        ${hypotheticalHtml}
+        <p class="muted small" style="margin-top:14px">
+          Note: Does not simulate attacker penetration. Gem/set bonuses included in stats.
+          FACTOR: 1:1 — each dmg type uses its attached defense type.
+          CUSTOM: sums ALL defense types that list the damage type in block-damage-types.
+        </p>
+      </div>`;
+  }
+
+  // =========================================================================
+  // BUILDER TAB (default)
+  // =========================================================================
+
   return `
     ${noIgWarn}
+    ${tabButtons}
 
     <div class="build-layout">
 
       <!-- LEFT: slots -->
       <div class="build-left">
         <div class="build-section-title">🎒 Equipment</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
           <span class="muted small">Player level:</span>
           <input class="edit-input edit-input--num" type="number" min="1" max="200"
             value="${BUILD_STATE.playerLevel}" style="width:60px"
-            oninput="APP.buildSetPlayerLevel(this.value)">
-          <span class="muted small">(informational — item level controls stat scaling)</span>
+            onchange="APP.buildSetPlayerLevel(this.value)">
+          <span class="muted small" style="margin-left:6px">❤ Base HP:</span>
+          <input class="edit-input edit-input--num" type="number" min="0" step="0.5"
+            value="${BUILD_STATE.baseHp}" style="width:60px"
+            placeholder="20"
+            onchange="APP.buildSetBaseHp(this.value)">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <span class="muted small">🔮 Base Mana:</span>
+          <input class="edit-input edit-input--num" type="number" min="0" step="1"
+            value="${BUILD_STATE.baseMana}" style="width:60px"
+            placeholder="0"
+            onchange="APP.buildSetBaseMana(this.value)">
+          <span class="muted small" style="margin-left:6px">⚡ Mana Regen/s:</span>
+          <input class="edit-input edit-input--num" type="number" min="0" step="0.01"
+            value="${BUILD_STATE.baseManaRegen}" style="width:60px"
+            placeholder="0"
+            onchange="APP.buildSetBaseManaRegen(this.value)">
+          <span class="muted small">(item level controls stat scaling)</span>
         </div>
         ${slotsHtml}
       </div>
@@ -3570,6 +3986,20 @@ function renderBuildPreview(_data, _sid) {
       <!-- RIGHT: summary -->
       <div class="build-right">
         <div class="build-section-title">📊 Build Summary</div>
+
+        <!-- HP Summary -->
+        <div class="build-card" style="margin-bottom:6px">
+          <div class="build-card__title" style="color:#f66">❤ Health Summary</div>
+          <table style="width:100%;font-size:12px"><tbody>${hpRows}</tbody></table>
+        </div>
+
+        <!-- Mana Summary -->
+        <div class="build-card" style="margin-bottom:10px">
+          <div class="build-card__title" style="color:#88f">🔮 Mana Summary</div>
+          <table style="width:100%;font-size:12px"><tbody>${manaRows}</tbody></table>
+          <div style="font-size:11px;color:#777;margin:4px 0 2px;padding:0 4px">Regen / second:</div>
+          <table style="width:100%;font-size:12px"><tbody>${manaRegenRows}</tbody></table>
+        </div>
 
         <div class="build-stats-grid">
           <div class="build-card">
@@ -3580,15 +4010,21 @@ function renderBuildPreview(_data, _sid) {
             <div class="build-card__title" style="color:#8af">🛡️ Defense Types (avg)</div>
             <table style="width:100%;font-size:12px"><tbody>${statTable(defEntries,'#8af')}</tbody></table>
           </div>
+
+          <!-- Fabled Attributes — per-attr stat breakdown -->
           <div class="build-card">
-            <div class="build-card__title" style="color:#af8">📈 Item Stats (avg)</div>
-            <table style="width:100%;font-size:12px"><tbody>${statTable(statEntries,'#af8')}</tbody></table>
+            <div class="build-card__title" style="color:#e8c040">⭐ Fabled Attributes</div>
+            <table style="width:100%;font-size:12px"><tbody>${faBreakdownRows}</tbody></table>
           </div>
-          ${faEntries.length ? `
+
+          <!-- Item Stats merged with FA contributions -->
           <div class="build-card">
-            <div class="build-card__title" style="color:#da8">⭐ Fabled Attributes (avg pts)</div>
-            <table style="width:100%;font-size:12px"><tbody>${statTable(faEntries,'#da8')}</tbody></table>
-          </div>` : ''}
+            <div class="build-card__title" style="color:#af8">📈 Item Stats
+              <span class="muted small" style="font-weight:400;margin-left:6px">gold = includes FA</span>
+            </div>
+            <table style="width:100%;font-size:12px"><tbody>${mergedStatRows}</tbody></table>
+          </div>
+
           <div class="build-card">
             <div class="build-card__title" style="color:#fa8">✨ Skills</div>
             <table style="width:100%;font-size:12px"><tbody>${statTable(skillEntries.map(([k,v])=>[k,`Lv ${v}`]),'#fa8')}</tbody></table>
@@ -3599,8 +4035,6 @@ function renderBuildPreview(_data, _sid) {
           <div class="build-card__title" style="color:#ffd">👑 Active Sets</div>
           ${setsHtml}
         </div>
-
-        ${combatHtml}
       </div>
 
     </div>`;
