@@ -4012,64 +4012,121 @@ function renderBuildPreview(_data, _sid) {
         <span class="muted small">Used for all rows below.</span>
       </div>`;
 
+    // ---- Defender rows — grouped by INCOMING DAMAGE TYPE ----
+    // Collect all unique damage types that any configured defense can block.
+    // Both modes iterate this set so the table always organises by "what can hit you".
+    const allBlockedDmgTypes = new Set();
+    for (const [, cfg] of Object.entries(defTypeCfg)) {
+      for (const dt of (cfg['block-damage-types'] ?? [])) allBlockedDmgTypes.add(dt);
+    }
+
     let defRows = '';
-    for (const [defId, rawVal] of defEntryPos2) {
-      const defCfg     = defTypeCfg[defId] ?? {};
-      const protFactor = +(defCfg['protection-factor'] ?? 1.0);
-      const blockedTypes = defCfg['block-damage-types'] ?? [];
-      if (!blockedTypes.length) continue;
 
-      for (const dmgType of blockedTypes) {
-        let effDef, dmgOut, pctRed;
-
-        if (mode === 'FACTOR') {
-          // FACTOR: buff keyed on defense type ID; protFactor in formula
-          const defBuffPct = totalStats[`DEFENSE_BUFF_${defId.toUpperCase()}`] || 0;
-          effDef = rawVal * pveDefMod * (1 + defBuffPct / 100);
-          dmgOut = evalForMode('FACTOR', '', { damage: combatAtkDmg, defense: effDef, toughness, protectionFactor: protFactor });
-        } else {
-          // CUSTOM: buff keyed on damage type ID; NO protFactor
-          const defBuffPct = totalStats[`DEFENSE_BUFF_${dmgType.toUpperCase()}`] || 0;
-          effDef = rawVal * pveDefMod * (1 + defBuffPct / 100);
-          dmgOut = evalForMode('CUSTOM', customExpr, { damage: combatAtkDmg, defense: effDef, toughness });
+    if (mode === 'CUSTOM') {
+      // ----------------------------------------------------------------
+      // CUSTOM: group by incoming damage type.
+      // All defense types from the build that block the same damage type
+      // are SUMMED together — then ONE formula call per row.
+      // Defense buff % is keyed on the DAMAGE type ID (per DamageManager).
+      // ----------------------------------------------------------------
+      for (const dmgType of [...allBlockedDmgTypes].sort()) {
+        let combinedDef = 0;
+        const parts = [];
+        for (const [defId, rawVal] of defEntryPos2) {
+          const cfg = defTypeCfg[defId] ?? {};
+          if ((cfg['block-damage-types'] ?? []).includes(dmgType)) {
+            combinedDef += rawVal * pveDefMod;
+            parts.push(
+              `<span style="color:#8af">${esc(defId)}</span>`
+              + `<span class="muted" style="font-size:10px">(${fmtN(rawVal)})</span>`
+            );
+          }
         }
+        if (!parts.length) continue;   // none of our defenses block this type
 
-        pctRed = combatAtkDmg > 0 ? (1 - dmgOut / combatAtkDmg) * 100 : 0;
+        // Apply defense buff % keyed on DAMAGE type ID
+        const defBuffPct = totalStats[`DEFENSE_BUFF_${dmgType.toUpperCase()}`] || 0;
+        if (defBuffPct !== 0) combinedDef *= (1 + defBuffPct / 100);
+
+        const dmgOut = evalForMode('CUSTOM', customExpr, { damage: combatAtkDmg, defense: combinedDef, toughness });
+        const pctRed = combatAtkDmg > 0 ? (1 - dmgOut / combatAtkDmg) * 100 : 0;
         const clr    = pctRed >= 50 ? '#af8' : pctRed >= 25 ? '#fa8' : '#f88';
-        const pfClr  = protFactor < 1 ? '#fa8' : '#666';
-        const inBuild = defEntryPos2.some(([d]) => d === defId) ? '' : 'color:#666;';
 
         defRows += `<tr>
-          <td style="padding:2px 8px;color:#8af;font-weight:600">${esc(defId)}</td>
-          <td style="padding:2px 8px;color:#f8c">${esc(dmgType)}</td>
+          <td style="padding:2px 8px;color:#f8c;font-weight:600">${esc(dmgType)}</td>
+          <td style="padding:2px 8px;font-size:11px">${parts.join('<span class="muted"> + </span>')}</td>
+          <td style="padding:2px 8px;text-align:right;color:#adf">${fmtN(combinedDef)}</td>
+          <td style="padding:2px 8px;text-align:right;color:#f88">${dmgOut.toFixed(2)}</td>
+          <td style="padding:2px 8px;text-align:right;color:${clr};font-weight:700">${pctRed.toFixed(1)}%</td>
+        </tr>`;
+      }
+    } else {
+      // ----------------------------------------------------------------
+      // FACTOR: group by incoming damage type.
+      // Only the HIGHEST-PRIORITY defense type from the build is used —
+      // this mirrors defAtt.getAttachedDefense() in DamageManager.
+      // Defense buff % is keyed on the DEFENSE type ID.
+      // ----------------------------------------------------------------
+      for (const dmgType of [...allBlockedDmgTypes].sort()) {
+        // All defense types from defTypeCfg that block this damage type, sorted priority DESC
+        const candidates = blockingDefTypes(dmgType);
+        // Pick the first one that is actually in the build
+        let chosen = null;
+        for (const [defId, defCfgEntry] of candidates) {
+          const found = defEntryPos2.find(([d]) => d === defId);
+          if (found) { chosen = { defId, defCfgEntry, rawVal: found[1] }; break; }
+        }
+        if (!chosen) continue;
+
+        const { defId, defCfgEntry, rawVal } = chosen;
+        const protFactor = +(defCfgEntry['protection-factor'] ?? 1.0);
+        const defBuffPct = totalStats[`DEFENSE_BUFF_${defId.toUpperCase()}`] || 0;
+        const effDef     = rawVal * pveDefMod * (1 + defBuffPct / 100);
+        const dmgOut     = evalForMode('FACTOR', '', { damage: combatAtkDmg, defense: effDef, toughness, protectionFactor: protFactor });
+        const pctRed     = combatAtkDmg > 0 ? (1 - dmgOut / combatAtkDmg) * 100 : 0;
+        const clr        = pctRed >= 50 ? '#af8' : pctRed >= 25 ? '#fa8' : '#f88';
+        const pfClr      = protFactor < 1 ? '#fa8' : '#666';
+
+        defRows += `<tr>
+          <td style="padding:2px 8px;color:#f8c;font-weight:600">${esc(dmgType)}</td>
+          <td style="padding:2px 8px;color:#8af">${esc(defId)}</td>
           <td style="padding:2px 8px;text-align:right;color:#8af">${fmtN(rawVal)}</td>
           <td style="padding:2px 8px;text-align:right;color:#adf">${fmtN(effDef)}</td>
-          ${mode === 'FACTOR' ? `<td style="padding:2px 8px;text-align:right;color:${pfClr}">${protFactor.toFixed(2)}</td>` : ''}
+          <td style="padding:2px 8px;text-align:right;color:${pfClr}">${protFactor.toFixed(2)}</td>
           <td style="padding:2px 8px;text-align:right;color:#f88">${dmgOut.toFixed(2)}</td>
           <td style="padding:2px 8px;text-align:right;color:${clr};font-weight:700">${pctRed.toFixed(1)}%</td>
         </tr>`;
       }
     }
 
-    const defFactorNote = mode === 'FACTOR'
-      ? `<span class="muted small">FACTOR: P.F from defense config · eff. def includes PvE mod + defense buff</span>`
-      : `<span class="muted small">CUSTOM: no P.F · eff. def = raw × PvE mod × defense buff · one formula call per row</span>`;
+    const defNote = mode === 'CUSTOM'
+      ? `<span class="muted small">CUSTOM: all defenses blocking the same damage type are <b>summed</b> · buff on damage type ID · one formula call per row</span>`
+      : `<span class="muted small">FACTOR: highest-priority defense from your build per incoming damage type · P.F from defense config · buff on defense type ID</span>`;
+
+    const defHeader = mode === 'CUSTOM' ? `
+      <th style="text-align:left;padding:2px 8px">Incoming Dmg</th>
+      <th style="text-align:left;padding:2px 8px">Your Defenses (summed)</th>
+      <th style="text-align:right;padding:2px 8px">Combined Eff. Def</th>
+      <th style="text-align:right;padding:2px 8px">Dmg Out</th>
+      <th style="text-align:right;padding:2px 8px">% Red.</th>` : `
+      <th style="text-align:left;padding:2px 8px">Incoming Dmg</th>
+      <th style="text-align:left;padding:2px 8px">Highest-Prio Def</th>
+      <th style="text-align:right;padding:2px 8px">Raw Def</th>
+      <th style="text-align:right;padding:2px 8px">Eff. Def</th>
+      <th style="text-align:right;padding:2px 8px">P.F</th>
+      <th style="text-align:right;padding:2px 8px">Dmg Out</th>
+      <th style="text-align:right;padding:2px 8px">% Red.</th>`;
+    const defColspan = mode === 'CUSTOM' ? 5 : 7;
 
     const defSectionHtml = defEntryPos2.length ? `
       <div style="font-size:13px;font-weight:700;color:#8af;margin:18px 0 4px">🛡️ Your Defense vs Attacker</div>
-      ${defFactorNote}
+      ${defNote}
       ${atkDmgInput}
       <table style="font-size:12px;width:100%;border-collapse:collapse">
         <thead><tr style="color:#555;font-size:10px;border-bottom:1px solid #333;background:#111">
-          <th style="text-align:left;padding:2px 8px">Def Type</th>
-          <th style="text-align:left;padding:2px 8px">Blocks Dmg</th>
-          <th style="text-align:right;padding:2px 8px">Raw Def</th>
-          <th style="text-align:right;padding:2px 8px">Eff. Def</th>
-          ${mode === 'FACTOR' ? `<th style="text-align:right;padding:2px 8px">P.F</th>` : ''}
-          <th style="text-align:right;padding:2px 8px">Dmg Out</th>
-          <th style="text-align:right;padding:2px 8px">% Red.</th>
+          ${defHeader}
         </tr></thead>
-        <tbody>${defRows || `<tr><td colspan="7" class="muted small" style="padding:6px 8px">No defense types with hook configuration.</td></tr>`}</tbody>
+        <tbody>${defRows || `<tr><td colspan="${defColspan}" class="muted small" style="padding:6px 8px">No defense in build blocks any configured damage type.</td></tr>`}</tbody>
       </table>` : '';
 
     const combatModeInfo = `
