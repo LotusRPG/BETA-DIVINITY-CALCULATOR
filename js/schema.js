@@ -154,7 +154,7 @@ const SCHEMA = {
       icon:        '⚗️',
       badge:       true,
       searchable:  true,
-      file:        'item_stats/item_generator/',   // folder — one .yml per item type
+      file:        'modules/item_generator/items/',   // folder — one .yml per item type
       multiFile:   true,
       renderer:    'renderItemGenerator',
       description: 'Item generation rules — one YAML file per item type. Drop multiple files at once.',

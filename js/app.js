@@ -571,7 +571,9 @@ const APP = {
       document.querySelectorAll('.mc-preview--live').forEach(el => {
         const inp = el.previousElementSibling;
         if (inp?.classList.contains('edit-input--format') && inp.value === String(value)) {
-          el.innerHTML = mc.toHtml(String(value));
+          let ctx = {};
+          try { ctx = JSON.parse(el.dataset.ctx || '{}'); } catch(_) {}
+          el.innerHTML = mc.toHtml(mc.resolve(String(value), ctx));
         }
       });
     }
@@ -1213,6 +1215,12 @@ const APP = {
     renderSection(_activeSection);
   },
 
+  /** Remove bonus entry with confirmation. */
+  igBonusConfirmRemoveEntry(sid, fname, bonusCat, key) {
+    if (!confirm(`Remove bonus entry "${key}"?`)) return;
+    this.igBonusRemoveEntry(sid, fname, bonusCat, key);
+  },
+
   /** Add a new blank skill entry to generator.skills.list (or any skills path). */
   igAddSkill(sid, fname, basePath) {
     const files = STATE.loaded[sid]?.files;
@@ -1508,11 +1516,16 @@ const APP = {
     if (!files?.[fname]) return;
     const file = files[fname];
 
-    // 1. Sync lore-format
-    const format = ids.map(id => `%${prefix}${id.toUpperCase().replace(/-/g, '_')}%`);
-    setPath(file, loreFormatPath, format);
+    // 1. Sync lore-format — preserve lines that don't belong to this prefix
+    const newPlaceholders = ids.map(id => `%${prefix}${id.toUpperCase().replace(/-/g, '_')}%`);
+    const existingLore = getPath(file, loreFormatPath) ?? [];
+    const prefixRe = new RegExp(`%${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+    const preserved = Array.isArray(existingLore) ? existingLore.filter(l => !prefixRe.test(String(l))) : [];
+    setPath(file, loreFormatPath, [...preserved, ...newPlaceholders]);
 
     // 2. Sync pool — add missing entries AND remove stale ones
+    // META_KEYS: keys that live in the same object as the pool entries but are not stat entries
+    const META_KEYS = new Set(['lore-format', 'minimum', 'maximum']);
     const STAT_DEFAULT = { chance: 0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false };
     let pool = getPath(file, poolPath);
     if (!pool || typeof pool !== 'object') {
@@ -1528,9 +1541,9 @@ const APP = {
         pool[poolKey] = JSON.parse(JSON.stringify(STAT_DEFAULT));
       }
     });
-    // Remove stale (keys in pool that are no longer in source)
+    // Remove stale (keys in pool that are no longer in source), but skip metadata keys
     Object.keys(pool).forEach(k => {
-      if (!targetKeys.has(k)) delete pool[k];
+      if (!targetKeys.has(k) && !META_KEYS.has(k)) delete pool[k];
     });
 
     renderSection(_activeSection);
@@ -1633,6 +1646,20 @@ const APP = {
       delete window.ITEM_TEMPLATES[sid][tplKey];
     }
     if (IG_LAST_TEMPLATE[sid] === tplKey) IG_LAST_TEMPLATE[sid] = '';
+    renderSection(_activeSection);
+  },
+
+  /** Save the current item file as a reusable custom template. */
+  igSaveAsTemplate(sid, fname) {
+    const files = STATE.loaded[sid]?.files;
+    if (!files?.[fname]) return;
+    const name = prompt('Template name (used in the template dropdown):', fname.replace(/\.ya?ml$/i, ''));
+    if (!name || !name.trim()) return;
+    const key = name.trim();
+    if (!window.ITEM_TEMPLATES) window.ITEM_TEMPLATES = {};
+    if (!window.ITEM_TEMPLATES[sid]) window.ITEM_TEMPLATES[sid] = {};
+    if (window.ITEM_TEMPLATES[sid][key] && !confirm(`Template "${key}" already exists. Overwrite?`)) return;
+    window.ITEM_TEMPLATES[sid][key] = JSON.parse(JSON.stringify(files[fname]));
     renderSection(_activeSection);
   },
 

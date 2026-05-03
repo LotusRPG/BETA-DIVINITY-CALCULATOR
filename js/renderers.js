@@ -22,6 +22,63 @@ const mc = {
     'l':'mcl','o':'mco','m':'mcm','n':'mcn','r':'mcr',
   },
   strip(s) { return s ? String(s).replace(/[&§][0-9a-fklmnoqr]/gi, '') : ''; },
+
+  /**
+   * Replace Divinity lore placeholders with sample/actual values so the
+   * preview looks like a real in-game item line.
+   *
+   * ctx keys:
+   *   name  — entry name   (default: styled "&eName&r")
+   *   value — sample value (default: styled "&a100&r")
+   *   cond  — condition prefix (default: "")
+   */
+  resolve(format, ctx = {}) {
+    if (!format) return format;
+    let s = String(format);
+
+    // Core stat placeholders
+    const name  = ctx.name  !== undefined ? String(ctx.name)  : '&eName&r';
+    const value = ctx.value !== undefined ? String(ctx.value) : '&a100&r';
+    const cond  = ctx.cond  !== undefined ? String(ctx.cond)  : '';
+    s = s.replace(/%name%/gi,      name);
+    s = s.replace(/%value%/gi,     value);
+    s = s.replace(/%condition%/gi, cond);
+
+    // Item stats  %ITEM_STAT_CC_RESISTANCE%  → &6[cc resistance]
+    s = s.replace(/%ITEM_STAT_([A-Z0-9_]+)%/g,
+      (_, id) => `&6[${id.toLowerCase().replace(/_/g, ' ')}]&r`);
+
+    // Damage / defense values  %DAMAGE_physical%  %DEFENSE_physical%
+    s = s.replace(/%DAMAGE_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&c[dmg: ${id}]&r`);
+    s = s.replace(/%DEFENSE_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&9[def: ${id}]&r`);
+
+    // Damage / defense buff %  %DAMAGE_BUFF_physical%  %DEFENSE_BUFF_physical%
+    s = s.replace(/%DAMAGE_BUFF_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&a[dmg%: ${id}]&r`);
+    s = s.replace(/%DEFENSE_BUFF_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&7[def%: ${id}]&r`);
+
+    // Penetration  %PENETRATION_physical_pen%
+    s = s.replace(/%PENETRATION_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&e[pen: ${id}]&r`);
+
+    // Item generator / socket / player placeholders
+    s = s.replace(/%GENERATOR_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&b[gen: ${id.toLowerCase()}]&r`);
+    s = s.replace(/%SOCKET_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&3[socket: ${id.toLowerCase()}]&r`);
+    s = s.replace(/%USER_([A-Za-z0-9_]+)%/g,
+      (_, id) => `&d[player: ${id.toLowerCase()}]&r`);
+
+    // Any remaining %UNKNOWN% → dark-gray badge
+    s = s.replace(/%([A-Za-z0-9_]+)%/g,
+      (_, id) => `&8[${id}]&r`);
+
+    return s;
+  },
+
   toHtml(s) {
     if (!s) return '';
     s = String(s);
@@ -131,7 +188,7 @@ function lineArrayFieldWithPreview(sid, path, value, previewId) {
   const text = arr.join('\n');
   const rows = Math.max(2, arr.length + 1);
   return `<textarea class="obj-textarea" rows="${rows}" placeholder="one value per line"
-    oninput="(function(t){const el=document.getElementById('${previewId}');if(!el)return;el.innerHTML=t.split('\\n').filter(Boolean).map(function(l){return'<div>'+mc.toHtml(l)+'</div>';}).join('');})(this.value)"
+    oninput="(function(t){const el=document.getElementById('${previewId}');if(!el)return;el.innerHTML=t.split('\\n').filter(Boolean).map(function(l){return'<div>'+mc.toHtml(mc.resolve(l,{}))+'</div>';}).join('');})(this.value)"
     onblur="APP.updateLineArray('${sid}','${esc(path)}',this.value)">${esc(text)}</textarea>`;
 }
 
@@ -183,9 +240,14 @@ function collapseAllBtn() {
 function igTplSelect(sid, options) {
   const last  = window.IG_LAST_TEMPLATE?.[sid] ?? '';
   const tpls  = window.ITEM_TEMPLATES?.[sid] ?? {};
-  // Only show options whose template key still exists in ITEM_TEMPLATES
-  const avail = options.filter(o => !o.value || tpls[o.value] !== undefined);
-  const opts  = [{ value: '', label: 'Empty' }, ...avail]
+  // Built-in options that still exist
+  const builtIn = options.filter(o => !o.value || tpls[o.value] !== undefined);
+  // User-saved custom templates (keys not in the built-in list)
+  const builtInKeys = new Set(options.map(o => o.value).filter(Boolean));
+  const custom = Object.keys(tpls).filter(k => !builtInKeys.has(k))
+    .map(k => ({ value: k, label: `⭐ ${k}` }));
+  const allOpts = [{ value: '', label: 'Empty' }, ...builtIn, ...custom];
+  const opts = allOpts
     .map(o => `<option value="${esc(o.value)}"${o.value === last ? ' selected' : ''}>${esc(o.label)}</option>`)
     .join('');
   return `<select id="ig-tpl-${sid}" class="edit-input ig-tpl-select"
@@ -1007,10 +1069,23 @@ function cardRow(label, content) {
   return `<div class="info-row"><span class="info-label">${label}</span><div style="flex:1">${content}</div></div>`;
 }
 
-function cardRowFormat(sid, id, format) {
+function cardRowFormat(sid, id, format, name = '') {
+  const pid     = `fmtprev-${sid}-${String(id).replace(/[^a-z0-9]/gi, '_')}`;
+  const ctx     = { name, value: '100' };
+  const ctxAttr = esc(JSON.stringify(ctx));
   return cardRow('Lore format',
     `${editText(sid, `${id}.format`, format, 'edit-input--format')}
-     <span class="mc-preview mc-preview--live">${mc.toHtml(format)}</span>`);
+     <span class="mc-preview mc-preview--live" id="${pid}" data-ctx="${ctxAttr}">${mc.toHtml(mc.resolve(format, ctx))}</span>`);
+}
+
+/**
+ * Name text input that also live-updates the associated format preview span.
+ * The preview span must have id="fmtprev-${sid}-${safeEntryId}".
+ */
+function editTextName(sid, path, val, entryId) {
+  const pid = `fmtprev-${sid}-${String(entryId).replace(/[^a-z0-9]/gi, '_')}`;
+  return `<input class="edit-input" type="text" value="${esc(val)}"
+    oninput="APP.updateField('${sid}','${esc(path)}',this.value);updateFormatPreview(this,'${pid}')">`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,10 +1263,12 @@ function renderGeneralStats(data, sid) {
     return `
       <tr class="data-row${enabled ? '' : ' row-disabled'}${isNew ? ' entry-new' : ''}">
         <td>${editId(sid, id)} ${isNew ? '<span class="badge badge-blue">new</span>' : ''}</td>
-        <td>${editText(sid, `${id}.name`, stat.name ?? id)}</td>
+        <td>${editTextName(sid, `${id}.name`, stat.name ?? id, id)}</td>
         <td>
           ${editText(sid, `${id}.format`, stat.format ?? '', 'edit-input--format')}
-          <span class="mc-preview mc-preview--live">${mc.toHtml(stat.format ?? '')}</span>
+          <span class="mc-preview mc-preview--live" data-ctx="${esc(JSON.stringify({ name: stat.name ?? id, value: '100' }))}">
+            ${mc.toHtml(mc.resolve(stat.format ?? '', { name: stat.name ?? id, value: '100' }))}
+          </span>
         </td>
         <td>${editNum(sid, `${id}.capacity`, stat.capacity ?? -1)}</td>
         <td>
@@ -1242,9 +1319,9 @@ function renderDamage(data, sid) {
             ${removeEntryBtn(sid, id)}
           </summary>
           <div class="item-card__body">
-            ${cardRow('Name',     editText(sid, `${id}.name`, dt.name ?? id))}
+            ${cardRow('Name',     editTextName(sid, `${id}.name`, dt.name ?? id, id))}
             ${cardRow('Priority', editNum(sid,  `${id}.priority`, dt.priority ?? 1, 'edit-input--inline'))}
-            ${cardRowFormat(sid, id, dt.format ?? '')}
+            ${cardRowFormat(sid, id, dt.format ?? '', dt.name ?? id)}
             ${cardRow('Attached causes',      lineArrayField(sid, `${id}.attached-damage-causes`,      dt['attached-damage-causes']      ?? []))}
             ${cardRow('Biome modifiers',   lineKvFieldNum(sid, `${id}.biome-damage-modifiers`,      dt['biome-damage-modifiers']      ?? {}, 'BIOME multiplier'))}
             <p class="muted small" style="margin-top:-6px;margin-bottom:4px">e.g. <code>PLAINS 1.0</code> — Bukkit Biome name.</p>
@@ -1289,10 +1366,10 @@ function renderDefense(data, sid) {
             ${removeEntryBtn(sid, id)}
           </summary>
           <div class="item-card__body">
-            ${cardRow('Name',              editText(sid, `${id}.name`, dt.name ?? id))}
+            ${cardRow('Name',              editTextName(sid, `${id}.name`, dt.name ?? id, id))}
             ${cardRow('Priority',          editNum(sid,  `${id}.priority`, dt.priority ?? 1, 'edit-input--inline'))}
             ${cardRow('Protection factor', editNum(sid,  `${id}.protection-factor`, dt['protection-factor'] ?? 1.0, 'edit-input--inline'))}
-            ${cardRowFormat(sid, id, dt.format ?? '')}
+            ${cardRowFormat(sid, id, dt.format ?? '', dt.name ?? id)}
             ${cardRow('Blocks damage types', lineArrayField(sid, `${id}.block-damage-types`, dt['block-damage-types'] ?? []))}
           </div>
         </details>
@@ -1334,9 +1411,9 @@ function renderPenetration(data, sid) {
             ${removeEntryBtn(sid, id)}
           </summary>
           <div class="item-card__body">
-            ${cardRow('Name',     editText(sid, `${id}.name`, pt.name ?? id))}
+            ${cardRow('Name',     editTextName(sid, `${id}.name`, pt.name ?? id, id))}
             ${cardRow('Capacity', editNum(sid,  `${id}.capacity`, pt.capacity ?? 100, 'edit-input--inline'))}
-            ${cardRowFormat(sid, id, pt.format ?? '')}
+            ${cardRowFormat(sid, id, pt.format ?? '', pt.name ?? id)}
             ${cardRow('% Pen',
               `${liveCheck(sid, `${id}.percent-pen`, isPct, pctId, 'percent-pen')}
                <span class="muted small">Checked = percent, unchecked = flat</span>`)}
@@ -1384,9 +1461,9 @@ function renderBuffs(data, sid) {
             ${removeEntryBtn(sid, id)}
           </summary>
           <div class="item-card__body">
-            ${cardRow('Name',     editText(sid, `${id}.name`, bt.name ?? id))}
+            ${cardRow('Name',     editTextName(sid, `${id}.name`, bt.name ?? id, id))}
             ${cardRow('Capacity', editNum(sid,  `${id}.capacity`, bt.capacity ?? 200, 'edit-input--inline'))}
-            ${cardRowFormat(sid, id, bt.format ?? '')}
+            ${cardRowFormat(sid, id, bt.format ?? '', bt.name ?? id)}
             ${cardRow('Enabled', liveCheck(sid, `${id}.enabled`, enabled, enId, 'enabled'))}
             ${cardRow('Hooks (damage types)', lineArrayField(sid, `${id}.hook`, bt.hook ?? []))}
           </div>
@@ -1518,8 +1595,7 @@ function igSkillsList(sid, fname, basePath, skillsData) {
             onclick="if(confirm('Remove skill \\'${escJs(key)}\\'?'))APP.igRemoveSkill('${sid}','${escJs(fname)}','${escJs(listPath)}','${escJs(key)}')">🗑</button>
         </div>
         <div style="font-size:11px;color:#888;margin-bottom:3px">Lore (one line per entry):</div>
-        ${igLineArray(sid, fname, `${listPath}.${key}.lore-format`, loreLines)}
-        ${loreLines.length ? lorePreview(loreLines) : ''}
+        ${igLoreFormat(sid, fname, `${listPath}.${key}.lore-format`, loreLines)}
       </div>`;
   }).join('');
 
@@ -1711,7 +1787,7 @@ function igBonusEntry(sid, fname, bonusCat, key, data, hasExtras) {
         onblur="if(this.value.trim()&&this.value.trim()!=='${escJs(key)}')APP.igBonusRenameEntry('${sid}','${escJs(fname)}','${escJs(bonusCat)}','${escJs(key)}',this.value.trim())"
         onkeydown="if(event.key==='Enter')this.blur()">
       <button style="padding:2px 7px;background:#3a1e1e;border:1px solid #8a3a3a;border-radius:3px;color:#ea8f8f;cursor:pointer;font-size:11px"
-        onclick="if(confirm('Remove bonus entry \\'${escJs(key)}\\'?'))APP.igBonusRemoveEntry('${sid}','${escJs(fname)}','${escJs(bonusCat)}','${escJs(key)}')">🗑 Remove</button>
+        onclick="APP.igBonusConfirmRemoveEntry('${sid}','${escJs(fname)}','${escJs(bonusCat)}','${escJs(key)}')">🗑 Remove</button>
     </div>
     ${igBonusTypeMap(sid, fname, `${bp}.damage-types`,  data['damage-types']  ?? {}, 'damage',         'Damage Types',      '⚔️')}
     ${igBonusTypeMap(sid, fname, `${bp}.defense-types`, data['defense-types'] ?? {}, 'defense',        'Defense Types',     '🛡️')}
@@ -1728,6 +1804,7 @@ function igBonusCategory(sid, fname, bonusCat, entries, hasExtras) {
     'material-modifiers': { icon: '🔮', title: 'Material Modifiers', hint: 'Wildcard or prefix material names — e.g. <code>diamond*</code>, <code>gold</code>.' },
     'material':           { icon: '🧱', title: 'Material Bonuses',   hint: 'Exact material / item IDs — e.g. <code>iron_sword</code>, <code>iron_helmet</code>.' },
     'class':              { icon: '🧙', title: 'Class Bonuses',       hint: 'Fabled class names — e.g. <code>Warrior</code>, <code>Cleric</code>. Supports: damage-types, defense-types, item-stats.' },
+    'rarity':             { icon: '✨', title: 'Rarity Bonuses',      hint: 'Tier/rarity names — e.g. <code>common</code>, <code>rare</code>, <code>legendary</code>. Supports: damage-types, defense-types, item-stats.' },
   }[bonusCat] ?? { icon: '📦', title: bonusCat, hint: '' };
 
   const entryHtml = Object.entries(entries).map(([k, v]) =>
@@ -1767,21 +1844,89 @@ function igItemFlags(sid, fname, flags) {
 }
 
 /** Render MC-colored preview of a lore/lore-format line array. */
-function lorePreview(lines) {
+function lorePreview(lines, ctx = {}) {
   if (!Array.isArray(lines) || !lines.length) return '<p class="muted small" style="margin-top:4px">No lines.</p>';
   return `<div class="lore-preview">${
     lines.map(l => l === ''
       ? '<div class="lore-line lore-blank"></div>'
-      : `<div class="lore-line">${mc.toHtml(String(l))}</div>`
+      : `<div class="lore-line">${mc.toHtml(mc.resolve(String(l), ctx))}</div>`
     ).join('')
   }</div>`;
 }
 
-/** lore-format textarea (line-by-line) + MC preview. */
+// ---------------------------------------------------------------------------
+// Global JS helpers (called from inline oninput/onclick attributes)
+// ---------------------------------------------------------------------------
+
+/**
+ * Live-update a lore preview div as the user types in a textarea.
+ * pid = id of the target <div class="lore-preview"> element.
+ */
+window.updateLorePreview = function(textarea, pid) {
+  const el = document.getElementById(pid);
+  if (!el) return;
+  const ls = textarea.value.split('\n');
+  el.innerHTML = ls.map(function(l) {
+    return l === ''
+      ? '<div class="lore-line lore-blank"></div>'
+      : '<div class="lore-line">' + mc.toHtml(mc.resolve(String(l), {})) + '</div>';
+  }).join('');
+};
+
+/**
+ * Live-update a mc-preview span when the associated "name" field changes.
+ * The preview span must have id=previewId and data-ctx with { name, value }.
+ * The format input must be the previousElementSibling of the preview span.
+ */
+window.updateFormatPreview = function(nameInput, previewId) {
+  const p = document.getElementById(previewId);
+  if (!p) return;
+  try {
+    const ctx = JSON.parse(p.dataset.ctx || '{}');
+    ctx.name = nameInput.value;
+    p.dataset.ctx = JSON.stringify(ctx);
+    const fi = p.previousElementSibling;
+    if (fi) p.innerHTML = mc.toHtml(mc.resolve(fi.value || '', ctx));
+  } catch (_) {}
+};
+
+/**
+ * Switch visible tab inside a tab group.
+ * tabGroupId — shared prefix for tab content div IDs.
+ * tabKey     — key of the tab to show.
+ */
+window.showIgTab = function(tabGroupId, tabKey) {
+  if (!window.IG_ACTIVE_TABS) window.IG_ACTIVE_TABS = {};
+  window.IG_ACTIVE_TABS[tabGroupId] = tabKey;
+  document.querySelectorAll('[data-tabgroup="' + tabGroupId + '"]').forEach(function(el) {
+    el.style.display = 'none';
+  });
+  document.querySelectorAll('[data-tabbtn="' + tabGroupId + '"]').forEach(function(btn) {
+    const active = btn.dataset.tabkey === tabKey;
+    btn.style.borderColor  = active ? '#4a8a4a' : '#444';
+    btn.style.background   = active ? '#1e3a1e' : '#1a1a1a';
+    btn.style.color        = active ? '#8fea8f' : '#999';
+    btn.style.borderBottomColor = active ? '#1e3a1e' : '#444';
+  });
+  const target = document.getElementById(tabGroupId + '-' + tabKey);
+  if (target) target.style.display = '';
+};
+
+/** lore-format textarea (line-by-line) + live MC preview. */
 function igLoreFormat(sid, fname, path, lines) {
-  const arr = Array.isArray(lines) ? lines : [];
-  return `${igLineArray(sid, fname, path, arr)}
-    ${arr.length ? lorePreview(arr) : ''}`;
+  const arr  = Array.isArray(lines) ? lines : [];
+  const pid  = `lprev-${(sid + fname + path).replace(/[^a-z0-9]/gi, '_').slice(0, 60)}`;
+  const rows = Math.max(2, arr.length + 1);
+  const text = arr.join('\n');
+  const previewHtml = arr.map(function(l) {
+    return l === ''
+      ? '<div class="lore-line lore-blank"></div>'
+      : '<div class="lore-line">' + mc.toHtml(mc.resolve(String(l), {})) + '</div>';
+  }).join('');
+  return `<textarea class="obj-textarea" rows="${rows}" placeholder="one value per line"
+    oninput="updateLorePreview(this,'${pid}')"
+    onblur="APP.igUpdateLineArray('${sid}','${escJs(fname)}','${escJs(path)}',this.value)">${esc(text)}</textarea>
+  <div id="${pid}" class="lore-preview">${previewHtml}</div>`;
 }
 
 /**
@@ -1865,7 +2010,7 @@ function buildStatGroup(sid, fname, basePath, groupData, title, syncSource, sync
   );
 }
 
-/** Collapsible for item-stats (has 4 sub-lists). */
+/** Collapsible for item-stats (has 4 tabs). */
 function buildItemStatsGroup(sid, fname, basePath, groupData) {
   if (!groupData || typeof groupData !== 'object') return '';
   const list   = groupData.list                ?? {};
@@ -1874,18 +2019,29 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
   const pen    = groupData['list-penetration']   ?? {};
   const active = Object.entries(list).filter(([, v]) => (v?.chance ?? 0) > 0).length;
 
-  const subList = (label, subBasePath, subData, syncSource, syncPrefix) => {
-    // Always render (even if empty) so the Sync button is accessible
-    const loreRow = igLoreFormat(sid, fname, `${subBasePath}.lore-format`, subData['lore-format'] ?? [])
-      + igSyncBtn(sid, fname, `${subBasePath}.lore-format`, subBasePath, syncSource, syncPrefix);
-    return `
-      <p class="ig-subhead">${label}</p>
-      ${cardRow('Lore format', loreRow)}
-      ${buildStatPool(sid, fname, subBasePath, subData)}`;
+  const tgId      = `istats-${sid}-${basePath.replace(/[^a-z0-9]/gi, '_')}`;
+  const activeTab = (window.IG_ACTIVE_TABS && window.IG_ACTIVE_TABS[tgId]) ?? 'general';
+
+  const tabBtn = (key, label) => {
+    const on = key === activeTab;
+    return `<button data-tabbtn="${tgId}" data-tabkey="${key}"
+      style="padding:4px 10px;border:1px solid ${on ? '#4a8a4a' : '#444'};border-radius:4px 4px 0 0;
+             background:${on ? '#1e3a1e' : '#1a1a1a'};color:${on ? '#8fea8f' : '#999'};
+             cursor:pointer;font-size:11px;border-bottom-color:${on ? '#1e3a1e' : '#444'}"
+      onclick="showIgTab('${tgId}','${key}')">${label}</button>`;
   };
 
-  const mainLoreRow = igLoreFormat(sid, fname, `${basePath}.lore-format`, groupData['lore-format'] ?? [])
-    + igSyncBtn(sid, fname, `${basePath}.lore-format`, `${basePath}.list`, `local:${basePath}.list`, 'ITEM_STAT_');
+  const tabPanel = (key, innerHtml) =>
+    `<div id="${tgId}-${key}" data-tabgroup="${tgId}"
+      style="display:${key === activeTab ? '' : 'none'};padding:8px 0 0">
+      ${innerHtml}
+    </div>`;
+
+  const tabContent = (subBasePath, subData, syncSource, syncPrefix) => {
+    const loreRow = igLoreFormat(sid, fname, `${subBasePath}.lore-format`, subData['lore-format'] ?? [])
+      + igSyncBtn(sid, fname, `${subBasePath}.lore-format`, subBasePath, syncSource, syncPrefix);
+    return `${cardRow('Lore format', loreRow)}${buildStatPool(sid, fname, subBasePath, subData)}`;
+  };
 
   const content = `
     <div class="info-row">
@@ -1896,12 +2052,18 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
         ${igNum(sid, fname, `${basePath}.maximum`, groupData.maximum ?? 0)}
       </div>
     </div>
-    ${cardRow('Lore format', mainLoreRow)}
-    <p class="ig-subhead">General stats — ${active} active</p>
-    ${buildStatPool(sid, fname, `${basePath}.list`, list)}
-    ${subList('Damage buffs %',  `${basePath}.list-damage-buffs`,  dmgBuf, 'section:dmgbuff',     'DAMAGE_BUFF_')}
-    ${subList('Defense buffs %', `${basePath}.list-defense-buffs`, defBuf, 'section:defbuff',     'DEFENSE_BUFF_')}
-    ${subList('Penetration',     `${basePath}.list-penetration`,   pen,    'section:penetration', 'PENETRATION_')}`;
+    <div style="display:flex;gap:2px;margin:10px 0 0;flex-wrap:wrap">
+      ${tabBtn('general',  '📊 General stats')}
+      ${tabBtn('dmgbuffs', '🔥 Damage buffs %')}
+      ${tabBtn('defbuffs', '🛡 Defense buffs %')}
+      ${tabBtn('pen',      '🎯 Penetration')}
+    </div>
+    <div style="border:1px solid #333;border-radius:0 4px 4px 4px;padding:8px">
+      ${tabPanel('general',  tabContent(`${basePath}.list`,               list,   'section:general',           'ITEM_STAT_'))}
+      ${tabPanel('dmgbuffs', tabContent(`${basePath}.list-damage-buffs`,  dmgBuf, 'section:dmgbuff',          'DAMAGE_BUFF_'))}
+      ${tabPanel('defbuffs', tabContent(`${basePath}.list-defense-buffs`, defBuf, 'section:defbuff',          'DEFENSE_BUFF_'))}
+      ${tabPanel('pen',      tabContent(`${basePath}.list-penetration`,   pen,    'section:penetration',      'PENETRATION_'))}
+    </div>`;
 
   return igCollapsible(
     `📊 Item Stats <span class="badge badge-blue" style="font-size:10px">${active} general active</span>`,
@@ -2086,6 +2248,8 @@ function renderItemGenFile(sid, fname, data, family) {
       </span>
       <button class="btn-download" title="Download ${esc(fname)}"
         onclick="APP.igDownload('${sid}','${escJs(fname)}')">⬇</button>
+      <button class="btn-add-entry" title="Save current item as a reusable template"
+        onclick="APP.igSaveAsTemplate('${sid}','${escJs(fname)}')">💾 Save as template</button>
       <button class="btn-icon btn-del" title="Remove from editor"
         onclick="if(confirm('Remove \\'${escJs(fname)}\\'?'))APP.igRemoveFile('${sid}','${escJs(fname)}')">🗑</button>
     </div>`;
@@ -2109,10 +2273,7 @@ function renderItemGenFile(sid, fname, data, family) {
     ${header}
     <div class="ig-card__body">
 
-      ${igCollapsible('👁 Lore', `
-        ${igLineArray(sid, fname, 'lore', lore)}
-        ${lore.length ? lorePreview(lore) : '<p class="muted small">No lore lines yet.</p>'}
-      `, true)}
+      ${igCollapsible('👁 Lore', igLoreFormat(sid, fname, 'lore', lore), true)}
 
       ${igCollapsible('📋 Basic Info', `
         ${cardRow('Name template',   igField(sid, fname, 'name', data.name ?? '', 'edit-input--format'))}
@@ -2147,6 +2308,7 @@ function renderItemGenFile(sid, fname, data, family) {
         ${igBonusCategory(sid, fname, 'material-modifiers', bonuses['material-modifiers'] ?? {}, true)}
         ${igBonusCategory(sid, fname, 'material',           bonuses.material              ?? {}, true)}
         ${igBonusCategory(sid, fname, 'class',              bonuses.class                 ?? {}, false)}
+        ${igBonusCategory(sid, fname, 'rarity',             bonuses.rarity                ?? {}, false)}
       `)}
 
       ${igCollapsible('📋 Requirements', (() => {
