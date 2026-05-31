@@ -47,8 +47,12 @@ const BUILD_STATE = {
   baseMana: 0,
   baseManaRegen: 0,
   buildTab: 'builder',
-  combatEnemyDefs: {},   // { defTypeId: number } — enemy defense values for attacker simulation
-  combatAtkDmg: 100,     // attacker damage value for defender simulation
+  buildName: '',            // current build label (cosmetic)
+  combatEnemyType: 'mob',  // 'mob' (PvE) or 'player' (PvP)
+  combatEnemyDefs: {},     // { defTypeId: number } — enemy defense values for attacker simulation
+  combatEnemyPen:  0,      // enemy global pen % applied to player's defense in defender simulation
+  combatAtkDmg: 100,       // attacker damage value for defender simulation
+  faOverrides: {},          // { attrKey: number } — manual FA point overrides
   slots: {
     weapon:  { fname: '', level: 1, gems: ['','',''], gemLevels: [1,1,1], essence: '', essenceLevel: 1, rune: '', runeLevel: 1 },
     offhand: { fname: '', level: 1, gems: ['','',''], gemLevels: [1,1,1], essence: '', essenceLevel: 1, rune: '', runeLevel: 1 },
@@ -157,26 +161,46 @@ async function loadMultiFile(sid, file) {
   }
   return new Promise(resolve => {
     const r = new FileReader();
+    const recordError = (msg) => {
+      // Accumulate per-file errors without clobbering siblings.
+      if (typeof STATE.errors[sid] === 'string' || !STATE.errors[sid]) {
+        STATE.errors[sid] = STATE.errors[sid]
+          ? `${STATE.errors[sid]}; ${file.name}: ${msg}`
+          : `${file.name}: ${msg}`;
+      }
+    };
     r.onload = e => {
       try {
         let parsed = YAML.parse(e.target.result);
         if (SECTION_FILE_SLIM[sid]) parsed = SECTION_FILE_SLIM[sid](parsed);
         STATE.loaded[sid].files[file.name] = parsed;
-        delete STATE.errors[sid];
       } catch (err) {
-        STATE.errors[sid] = err.message;
+        recordError(err.message);
       }
       resolve();
     };
-    r.onerror = () => { STATE.errors[sid] = 'Could not read file.'; resolve(); };
+    r.onerror = () => { recordError('Could not read file.'); resolve(); };
     r.readAsText(file, 'UTF-8');
   });
 }
 
 /** Coerce value to match the existing type at path. */
 function coerce(existing, value) {
-  if (typeof existing === 'boolean') return Boolean(value);
-  if (typeof existing === 'number')  { const n = Number(value); return isNaN(n) ? existing : n; }
+  if (typeof existing === 'boolean') {
+    // Accept booleans verbatim; for strings recognise truthy/falsy words.
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const v = value.trim().toLowerCase();
+      if (v === 'true'  || v === 'yes' || v === 'on'  || v === '1') return true;
+      if (v === 'false' || v === 'no'  || v === 'off' || v === '0' || v === '') return false;
+    }
+    return Boolean(value);
+  }
+  if (typeof existing === 'number') {
+    if (value === '' || value === null || value === undefined) return 0;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : existing;
+  }
   return value;
 }
 
@@ -196,42 +220,43 @@ function renderSection(sectionId) {
 
   const def = SCHEMA.sections[sectionId];
   if (!def) {
-    content.innerHTML = `<div class="alert alert-error">Unknown section: ${sectionId}</div>`;
+    content.innerHTML = `<div class="alert alert-error">${T('Unknown section')}: ${sectionId}</div>`;
     return;
   }
 
+  const defFile = getSectionFile(def);
   let html = `
     <div class="section-header">
-      <div class="section-title">${def.icon} ${def.label}</div>
-      ${def.description ? `<div class="section-desc">${def.description}</div>` : ''}
+      <div class="section-title">${def.icon} ${T(getSectionLabel(def))}</div>
+      ${def.description ? `<div class="section-desc">${T(def.description)}</div>` : ''}
     </div>`;
 
-  if (STATE.loaded[sectionId] && def.file) {
+  if (STATE.loaded[sectionId] && defFile) {
     const isMulti = !!def.multiFile;
     const dlBtn   = isMulti
-      ? `<button class="btn-download" onclick="APP.igDownloadAll('${sectionId}')">⬇ Download all (ZIP)</button>`
-      : `<button class="btn-download" onclick="APP.download('${sectionId}')">⬇ Download <code>${def.file.split('/').pop()}</code></button>`;
+      ? `<button class="btn-download" onclick="APP.igDownloadAll('${sectionId}')">⬇ ${T('Download all (ZIP)')}</button>`
+      : `<button class="btn-download" onclick="APP.download('${sectionId}')">⬇ ${T('Download')} <code>${defFile.split('/').pop()}</code></button>`;
     html += `
       <div class="section-toolbar">
-        <span class="toolbar-hint">✏️ Edit fields directly. Changes are in memory until downloaded.</span>
+        <span class="toolbar-hint">✏️ ${T('Edit fields directly. Changes are in memory until downloaded.')}</span>
         ${dlBtn}
       </div>`;
   }
 
-  if (!STATE.loaded[sectionId] && def.file) {
+  if (!STATE.loaded[sectionId] && defFile) {
     const err = STATE.errors[sectionId];
     html += err
-      ? `<div class="alert alert-error">❌ Load error: ${err}
+      ? `<div class="alert alert-error">❌ ${T('Load error')}: ${err}
            <div style="margin-top:10px">
-             <button class="btn-setting" onclick="APP.createEmpty('${sectionId}')">✨ Start with empty file anyway</button>
+             <button class="btn-setting" onclick="APP.createEmpty('${sectionId}')">✨ ${T('Start with empty file anyway')}</button>
            </div>
          </div>`
       : `<div class="empty-state">
            <div style="font-size:36px;margin-bottom:12px">📂</div>
-           <div>Load <code>${def.file}</code> in <b>Load Files</b> first.</div>
-           <div style="margin-top:14px;color:var(--muted);font-size:13px">— or —</div>
+           <div>${T('Load')} <code>${defFile}</code> ${T('in <b>Load Files</b> first.')}</div>
+           <div style="margin-top:14px;color:var(--muted);font-size:13px">— ${T('or')} —</div>
            <button class="btn-setting" style="margin-top:10px"
-                   onclick="APP.createEmpty('${sectionId}')">✨ Start with empty file</button>
+                   onclick="APP.createEmpty('${sectionId}')">✨ ${T('Start with empty file')}</button>
          </div>`;
     content.innerHTML = html;
     return;
@@ -239,7 +264,7 @@ function renderSection(sectionId) {
 
   const rendererFn = RENDERERS[def.renderer];
   if (typeof rendererFn !== 'function') {
-    html += `<div class="alert alert-error">Missing renderer: ${def.renderer}</div>`;
+    html += `<div class="alert alert-error">${T('Missing renderer')}: ${def.renderer}</div>`;
     content.innerHTML = html;
     return;
   }
@@ -247,10 +272,11 @@ function renderSection(sectionId) {
   try {
     html += rendererFn(STATE.loaded[sectionId], sectionId);
   } catch (e) {
-    html += `<div class="alert alert-error">❌ Render error: ${e.message}
+    html += `<div class="alert alert-error">❌ ${T('Render error')}: ${e.message}
       <pre style="margin-top:8px;font-size:11px">${e.stack}</pre></div>`;
   }
 
+  const prevScrollTop = content.scrollTop;
   content.innerHTML = html;
 
   // Inject search box for searchable sections
@@ -260,7 +286,7 @@ function renderSection(sectionId) {
       const q = SECTION_SEARCH[sectionId] ?? '';
       const searchEl = document.createElement('div');
       searchEl.style.cssText = 'margin-left:auto;display:flex;align-items:center;gap:6px';
-      searchEl.innerHTML = `<input id="section-search-${sectionId}" type="search" placeholder="🔍 Search…"
+      searchEl.innerHTML = `<input id="section-search-${sectionId}" type="search" placeholder="🔍 ${T('Search…')}"
         value="${q.replace(/"/g, '&quot;')}"
         style="padding:4px 8px;border-radius:4px;border:1px solid #444;background:#1a1a1a;color:#ddd;font-size:13px;width:180px"
         oninput="APP.filterSection('${sectionId}',this.value)">`;
@@ -277,6 +303,7 @@ function renderSection(sectionId) {
     }
     // New elements (not in DETAILS_STATE) keep their default from the rendered HTML
   });
+  content.scrollTop = prevScrollTop;
 }
 
 /** Filter .item-card elements by text content match (case-insensitive). */
@@ -297,7 +324,7 @@ function applyCardFilter(root, query) {
 // ---------------------------------------------------------------------------
 
 function buildLoadSection() {
-  const defs = Object.values(SCHEMA.sections).filter(s => s.id !== 'load' && s.file);
+  const defs = Object.values(SCHEMA.sections).filter(s => s.id !== 'load' && s.file && sectionVisibleInMode(s));
 
   const zones = defs.map(def => {
     const isMulti = !!def.multiFile;
@@ -306,15 +333,16 @@ function buildLoadSection() {
     const isLoaded  = isMulti ? fileCount > 0 : !!loadedRaw;
     const hasError  = !!STATE.errors[def.id];
     let statusText = '', statusClass = '';
-    if (isLoaded && isMulti)    { statusText = `✅ ${fileCount} file(s)`; statusClass = 'loaded'; }
-    else if (isLoaded)          { statusText = '✅ Loaded'; statusClass = 'loaded'; }
-    else if (hasError)          { statusText = '❌ Error';  statusClass = 'error';  }
+    if (isLoaded && isMulti)    { statusText = `✅ ${fileCount} ${T('file(s)')}`; statusClass = 'loaded'; }
+    else if (isLoaded)          { statusText = `✅ ${T('Loaded')}`; statusClass = 'loaded'; }
+    else if (hasError)          { statusText = `❌ ${T('Error')}`;  statusClass = 'error';  }
 
     const loadedFiles = isMulti && loadedRaw?._multiFile ? Object.keys(loadedRaw.files) : [];
     const fileChips   = loadedFiles.length
       ? `<div class="zone-loaded-files">${loadedFiles.map(f => `<span class="zone-file-chip">${f}</span>`).join('')}</div>`
       : '';
-    const hintText = isMulti ? `${def.file} (folder — drop files)` : def.file;
+    const file = getSectionFile(def);
+    const hintText = isMulti ? `${file} ${T('(folder — drop files)')}` : file;
 
     return `
       <div class="file-drop-zone-wrap">
@@ -327,25 +355,22 @@ function buildLoadSection() {
           <div class="file-drop-zone__label">
             <span style="font-size:22px">${def.icon}</span>
             <div>
-              <div class="file-drop-zone__name">${def.label}</div>
+              <div class="file-drop-zone__name">${T(getSectionLabel(def))}</div>
               <div class="file-drop-zone__hint">${hintText}</div>
             </div>
             <span class="file-drop-zone__status ${statusClass}">${statusText}</span>
           </div>
         </label>
         ${fileChips}
-        ${!isLoaded ? `<button class="btn-create-empty" title="Start editing without a file"
-          onclick="APP.createEmpty('${def.id}');APP.navigate('${def.id}')">✨ Start empty</button>` : ''}
+        ${!isLoaded ? `<button class="btn-create-empty" title="${T('Start editing without a file')}"
+          onclick="APP.createEmpty('${def.id}');APP.navigate('${def.id}')">✨ ${T('Start empty')}</button>` : ''}
       </div>`;
   }).join('');
 
   return `
     <div class="section-header">
-      <div class="section-title">📂 Load Files</div>
-      <div class="section-desc">
-        Click a tile or drag-and-drop a YAML file onto it.
-        All parsing is local — nothing is sent over the network.
-      </div>
+      <div class="section-title">📂 ${T('Load Files')}</div>
+      <div class="section-desc">${T('Click a tile or drag-and-drop a YAML file onto it. All parsing is local — nothing is sent over the network.')}</div>
     </div>
     <div id="section-load">${zones}</div>`;
 }
@@ -358,11 +383,14 @@ let _activeSection = 'load';
 
 function buildNav() {
   const nav = document.getElementById('nav');
-  let html = `<div class="nav-logo">⚔️ Divinity Builder<span>config visualizer & editor</span></div>`;
+  let html = `<div class="nav-logo">${T('⚔️ Divinity Builder')}<span>${T('config visualizer & editor')}</span></div>`;
+  html += buildLangSwitcher();
 
   SCHEMA.groups.forEach(group => {
-    html += `<div class="nav-group">${group.label}</div>`;
-    group.sections.forEach(sid => {
+    const visibleSids = group.sections.filter(sid => sectionVisibleInMode(SCHEMA.sections[sid]));
+    if (visibleSids.length === 0) return;
+    html += `<div class="nav-group">${T(group.label)}</div>`;
+    visibleSids.forEach(sid => {
       const def = SCHEMA.sections[sid];
       if (!def) return;
       const badge = def.badge !== false
@@ -370,7 +398,7 @@ function buildNav() {
       html += `
         <div class="nav-item" id="nav-${sid}" onclick="APP.navigate('${sid}')">
           <span class="nav-icon">${def.icon}</span>
-          <span>${def.label}</span>
+          <span>${T(getSectionLabel(def))}</span>
           ${badge}
         </div>`;
     });
@@ -378,6 +406,7 @@ function buildNav() {
 
   nav.innerHTML = html;
   updateActiveNav(_activeSection);
+  SCHEMA.groups.forEach(g => g.sections.forEach(updateBadge));
 }
 
 function updateActiveNav(sid) {
@@ -405,10 +434,34 @@ function updateBadge(sid) {
  * Pattern matched: bare scalar value that is one or more colon-separated
  * integers (like "1:2", "0:1", "1:2:3").
  */
+/**
+ * Sanitize a path component (folder or filename) for safe use in
+ * filesystem / ZIP paths. Strips slashes, drive letters, control chars,
+ * and disallows ".."/"." components that would escape the target dir.
+ */
+function sanitizePathComponent(name) {
+  let s = String(name ?? '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
+  if (s === '' || s === '.' || s === '..') return '_';
+  return s;
+}
+
+/** Strip internal Builder-only meta fields from a serialized data object. */
+function stripMetaFields(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof k === 'string' && k.startsWith('_')) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 function toYaml(data) {
-  let yaml = YAML.stringify(data);
-  // Quote sexagesimal-looking bare values: "key: 1:2" → "key: '1:2'"
-  yaml = yaml.replace(/(:\s+)(\d+(?::\d+)+)(\s*(?:#.*)?$)/gm, "$1'$2'$3");
+  let yaml = YAML.stringify(stripMetaFields(data));
+  // Quote sexagesimal-looking bare values that SnakeYAML would parse as int.
+  // Cover both "key: 1:2" and "- 1:2" (bare list item).
+  yaml = yaml.replace(/(:\s+)(\d+(?::\d+)+)(\s*(?:#.*)?)$/gm, "$1'$2'$3");
+  yaml = yaml.replace(/(^\s*-\s+)(\d+(?::\d+)+)(\s*(?:#.*)?)$/gm, "$1'$2'$3");
   return yaml;
 }
 
@@ -452,16 +505,40 @@ function afterLoad(sid) {
       let text = '', cls = '';
       if (raw && def?.multiFile) {
         const n = Object.keys(raw.files || {}).length;
-        text = `✅ ${n} file(s)`; cls = 'loaded';
+        text = `✅ ${n} ${T('file(s)')}`; cls = 'loaded';
       } else if (raw) {
-        text = '✅ Loaded'; cls = 'loaded';
+        text = `✅ ${T('Loaded')}`; cls = 'loaded';
       } else if (STATE.errors[sid]) {
-        text = '❌ Error';  cls = 'error';
+        text = `❌ ${T('Error')}`;  cls = 'error';
       }
       statusEl.textContent = text;
       statusEl.className   = `file-drop-zone__status ${cls}`;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Directory reading helper (for folder drag-and-drop + webkitdirectory input)
+// ---------------------------------------------------------------------------
+
+async function readDirEntryFiles(entry) {
+  if (entry.isFile) {
+    return new Promise(res => entry.file(f => res([f])));
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const allEntries = await new Promise(res => {
+      const acc = [];
+      const read = () => reader.readEntries(batch => {
+        if (!batch.length) res(acc);
+        else { acc.push(...batch); read(); }
+      });
+      read();
+    });
+    const nested = await Promise.all(allEntries.map(readDirEntryFiles));
+    return nested.flat();
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +556,29 @@ const APP = {
     document.getElementById('content').scrollTop = 0;
   },
 
+  // ---- Language ----
+
+  setLang(code) {
+    if (!SUPPORTED_LANGS.includes(code) || code === LANG) return;
+    LANG = code;
+    try { localStorage.setItem(LANG_STORAGE_KEY, code); } catch (_) {}
+    buildNav();
+    renderSection(_activeSection);
+  },
+
+  // ---- Mode (vanilla / modded) ----
+
+  setMode(m) {
+    if (!SUPPORTED_MODES.includes(m) || m === MODE) return;
+    MODE = m;
+    try { localStorage.setItem(MODE_STORAGE_KEY, m); } catch (_) {}
+    // If active section is now hidden in new mode, fall back to 'load'.
+    const def = SCHEMA.sections[_activeSection];
+    if (!sectionVisibleInMode(def)) _activeSection = 'load';
+    buildNav();
+    renderSection(_activeSection);
+  },
+
   // ---- Section card search ----
 
   filterSection(sectionId, query) {
@@ -492,6 +592,7 @@ const APP = {
       d.open = false;
       DETAILS_STATE[d.dataset.key] = false;
     });
+    document.querySelectorAll('#content details.card-details:not([data-key])').forEach(d => { d.open = false; });
   },
 
   /** Expand all <details data-key> in the current section and persist state. */
@@ -500,6 +601,7 @@ const APP = {
       d.open = true;
       DETAILS_STATE[d.dataset.key] = true;
     });
+    document.querySelectorAll('#content details.card-details:not([data-key])').forEach(d => { d.open = true; });
   },
 
   /* ── Fabled Attributes — stat helpers ──────────────────────────────── */
@@ -527,6 +629,35 @@ const APP = {
     const q = query.trim().toLowerCase();
     tbl.querySelectorAll('tbody tr').forEach(row => {
       row.style.display = (!q || row.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+  },
+
+  /**
+   * Like filterTable but preserves category header rows: shows a category header
+   * iff at least one of its data rows matches. Match scope: row text + category name.
+   */
+  filterGeneralStats(tableId, query) {
+    const tbl = document.getElementById(tableId);
+    if (!tbl) return;
+    const q = query.trim().toLowerCase();
+    const rows = [...tbl.querySelectorAll('tbody tr')];
+    // First pass: hide/show data rows, count visible per category
+    const visibleByCat = {};
+    rows.forEach(row => {
+      if (row.classList.contains('cat-header')) return;
+      const cat = (row.getAttribute('data-cat') || '').toLowerCase();
+      const text = row.textContent.toLowerCase();
+      const match = !q || text.includes(q) || cat.includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) visibleByCat[cat] = (visibleByCat[cat] || 0) + 1;
+    });
+    // Second pass: show category header iff its category has visible rows OR query matches header text
+    rows.forEach(row => {
+      if (!row.classList.contains('cat-header')) return;
+      const cat = (row.getAttribute('data-cat-header') || '').toLowerCase();
+      const hasVisible = (visibleByCat[cat] || 0) > 0;
+      const headerMatches = !q || cat.includes(q);
+      row.style.display = (hasVisible || headerMatches) ? '' : 'none';
     });
   },
 
@@ -566,16 +697,17 @@ const APP = {
     const existing = getPath(data, path);
     setPath(data, path, coerce(existing, value));
 
-    // Live-update mc-preview span for format fields
+    // Live-update mc-preview span only for the input that actually triggered this call.
     if (path.endsWith('.format') || path.endsWith('-formula')) {
-      document.querySelectorAll('.mc-preview--live').forEach(el => {
-        const inp = el.previousElementSibling;
-        if (inp?.classList.contains('edit-input--format') && inp.value === String(value)) {
+      const trigger = (typeof event !== 'undefined' && event && event.target) ? event.target : null;
+      if (trigger && trigger.classList?.contains('edit-input--format')) {
+        const el = trigger.nextElementSibling;
+        if (el && el.classList?.contains('mc-preview--live')) {
           let ctx = {};
           try { ctx = JSON.parse(el.dataset.ctx || '{}'); } catch(_) {}
           el.innerHTML = mc.toHtml(mc.resolve(String(value), ctx));
         }
-      });
+      }
     }
   },
 
@@ -595,9 +727,9 @@ const APP = {
   setFormulaMode(sid, mode) {
     const data = STATE.loaded[sid];
     if (!data) return;
-    const combat = data.combat || data;
-    combat['defense-formula'] = mode;
-    combat['legacy-combat']   = mode === 'LEGACY';
+    if (!data.combat || typeof data.combat !== 'object') data.combat = {};
+    data.combat['defense-formula'] = mode;
+    data.combat['legacy-combat']   = mode === 'LEGACY';
     renderSection(sid);
   },
 
@@ -617,7 +749,7 @@ const APP = {
   recalcFormulaPreview() {
     const data    = STATE.loaded['formula'];
     if (!data) return;
-    const combat  = data.combat || data;
+    const combat  = (data.combat && typeof data.combat === 'object') ? data.combat : data;
     const mode    = String(combat['defense-formula'] || 'FACTOR').toUpperCase();
     const formula = combat['custom-defense-formula'] || 'damage*(25/(25+defense))';
 
@@ -888,6 +1020,120 @@ const APP = {
     if (_activeSection === 'build') renderSection('build');
   },
 
+  combatSetEnemyType(type) {
+    BUILD_STATE.combatEnemyType = type;
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  combatSetEnemyPen(value) {
+    BUILD_STATE.combatEnemyPen = Math.max(0, parseFloat(value) || 0);
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  // ---- Build QoL ----
+
+  buildSetName(name) {
+    BUILD_STATE.buildName = String(name ?? '');
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetAllLevels(level) {
+    const lv = Math.max(1, +level || 1);
+    BUILD_STATE.playerLevel = lv;
+    for (const slot of Object.values(BUILD_STATE.slots)) slot.level = lv;
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildClearAll() {
+    for (const slot of Object.values(BUILD_STATE.slots)) {
+      slot.fname = '';
+      slot.gems = ['', '', ''];
+      slot.gemLevels = [1, 1, 1];
+      slot.essence = '';
+      slot.essenceLevel = 1;
+      slot.rune = '';
+      slot.runeLevel = 1;
+    }
+    BUILD_STATE.faOverrides = {};
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildFillAllGems(fname, level) {
+    const lv = Math.max(1, +level || 1);
+    for (const slot of Object.values(BUILD_STATE.slots)) {
+      const gemData = STATE.loaded?.gems?.files?.[fname];
+      const itemData = slot.fname ? STATE.loaded?.itemgen?.files?.[slot.fname] : null;
+      const gemMax = itemData ? (itemData.generator?.sockets?.GEM?.maximum ?? 0) : 0;
+      for (let i = 0; i < gemMax; i++) {
+        slot.gems[i] = fname;
+        slot.gemLevels[i] = lv;
+      }
+    }
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSetFaOverride(attr, value) {
+    const v = parseFloat(value);
+    if (isNaN(v) || value === '') {
+      delete BUILD_STATE.faOverrides[attr];
+    } else {
+      BUILD_STATE.faOverrides[attr] = Math.max(0, v);
+    }
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildClearFaOverride(attr) {
+    delete BUILD_STATE.faOverrides[attr];
+    if (_activeSection === 'build') renderSection('build');
+  },
+
+  buildSaveLocal(name) {
+    if (!name) return;
+    try {
+      const saves = JSON.parse(localStorage.getItem('div_build_saves') || '{}');
+      saves[name] = {
+        playerLevel: BUILD_STATE.playerLevel,
+        baseHp:      BUILD_STATE.baseHp,
+        baseMana:    BUILD_STATE.baseMana,
+        baseManaRegen: BUILD_STATE.baseManaRegen,
+        faOverrides: { ...BUILD_STATE.faOverrides },
+        slots: JSON.parse(JSON.stringify(BUILD_STATE.slots)),
+        savedAt: new Date().toISOString(),
+      };
+      localStorage.setItem('div_build_saves', JSON.stringify(saves));
+      BUILD_STATE.buildName = name;
+      if (_activeSection === 'build') renderSection('build');
+    } catch(e) { alert(T('Save failed: ') + e.message); }
+  },
+
+  buildLoadLocal(name) {
+    try {
+      const saves = JSON.parse(localStorage.getItem('div_build_saves') || '{}');
+      const s = saves[name];
+      if (!s) return;
+      BUILD_STATE.playerLevel  = s.playerLevel  ?? 1;
+      BUILD_STATE.baseHp       = s.baseHp       ?? 20;
+      BUILD_STATE.baseMana     = s.baseMana      ?? 0;
+      BUILD_STATE.baseManaRegen= s.baseManaRegen ?? 0;
+      BUILD_STATE.faOverrides  = s.faOverrides   ?? {};
+      BUILD_STATE.buildName    = name;
+      for (const [key, data] of Object.entries(s.slots ?? {})) {
+        if (BUILD_STATE.slots[key]) Object.assign(BUILD_STATE.slots[key], data);
+      }
+      if (_activeSection === 'build') renderSection('build');
+    } catch(e) { alert(T('Load failed: ') + e.message); }
+  },
+
+  buildDeleteLocal(name) {
+    try {
+      const saves = JSON.parse(localStorage.getItem('div_build_saves') || '{}');
+      delete saves[name];
+      localStorage.setItem('div_build_saves', JSON.stringify(saves));
+      if (BUILD_STATE.buildName === name) BUILD_STATE.buildName = '';
+      if (_activeSection === 'build') renderSection('build');
+    } catch(e) {}
+  },
+
   // ---- Entries ----
 
   removeEntry(sid, key) {
@@ -906,7 +1152,7 @@ const APP = {
     const data = STATE.loaded[sid];
     if (!data) return;
     if (Object.prototype.hasOwnProperty.call(data, newKey)) {
-      alert(`Key "${newKey}" already exists.`);
+      alert(`${T('Key')} "${newKey}" ${T('already exists.')}`);
       renderSection(_activeSection); // reset input
       return;
     }
@@ -930,9 +1176,10 @@ const APP = {
       this.igDownloadAll(sid);
       return;
     }
-    const blob = new Blob([toYaml(data)], { type: 'text/yaml;charset=utf-8' });
+    const outData = sid === 'formula' ? _stripFormulaFile(data) : data;
+    const blob = new Blob([toYaml(outData)], { type: 'text/yaml;charset=utf-8' });
     const url  = URL.createObjectURL(blob);
-    const a    = Object.assign(document.createElement('a'), { href: url, download: def.file.split('/').pop() });
+    const a    = Object.assign(document.createElement('a'), { href: url, download: getSectionFile(def).split('/').pop() });
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -955,7 +1202,15 @@ const APP = {
     document.getElementById(`zone-${sid}`)?.classList.remove('drag-over');
     const def = SCHEMA.sections[sid];
     if (def?.multiFile) {
-      const files = Array.from(event.dataTransfer.files).filter(f => /\.ya?ml$/i.test(f.name));
+      const items = Array.from(event.dataTransfer.items || []);
+      const entries = items.map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+      let files;
+      if (entries.length) {
+        const nested = await Promise.all(entries.map(readDirEntryFiles));
+        files = nested.flat().filter(f => /\.ya?ml$/i.test(f.name));
+      } else {
+        files = Array.from(event.dataTransfer.files).filter(f => /\.ya?ml$/i.test(f.name));
+      }
       for (const f of files) await loadMultiFile(sid, f);
       updateBadge(sid);
       afterLoad(sid);
@@ -1180,7 +1435,8 @@ const APP = {
       setPath(file, path, {});
       cat = getPath(file, path);
     }
-    const key = 'new-entry-' + Date.now();
+    let key, n = 1;
+    do { key = `new-entry-${n++}`; } while (Object.prototype.hasOwnProperty.call(cat, key));
     cat[key] = {};
     renderSection(_activeSection);
   },
@@ -1205,7 +1461,7 @@ const APP = {
     const cat  = getPath(files[fname], path);
     if (!cat || typeof cat !== 'object') return;
     if (Object.prototype.hasOwnProperty.call(cat, newKey)) {
-      alert(`Entry "${newKey}" already exists.`);
+      alert(`${T('Entry')} "${newKey}" ${T('already exists.')}`);
       renderSection(_activeSection); // reset the input field to old key
       return;
     }
@@ -1217,7 +1473,7 @@ const APP = {
 
   /** Remove bonus entry with confirmation. */
   igBonusConfirmRemoveEntry(sid, fname, bonusCat, key) {
-    if (!confirm(`Remove bonus entry "${key}"?`)) return;
+    if (!confirm(`${T('Remove bonus entry')} "${key}"?`)) return;
     this.igBonusRemoveEntry(sid, fname, bonusCat, key);
   },
 
@@ -1229,7 +1485,8 @@ const APP = {
     const listPath = `${basePath}.list`;
     let list = getPath(file, listPath);
     if (!list || typeof list !== 'object') { setPath(file, listPath, {}); list = getPath(file, listPath); }
-    const key = 'new-skill-' + Date.now();
+    let key, n = 1;
+    do { key = `new-skill-${n++}`; } while (Object.prototype.hasOwnProperty.call(list, key));
     list[key] = { chance: 0, 'min-level': 1, 'max-level': 1, 'lore-format': [] };
     renderSection(_activeSection);
   },
@@ -1294,12 +1551,13 @@ const APP = {
     this._igDragging = { sid, fname };
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', fname);
+    const target = event.target;
     // Let the browser show the default drag ghost; dim the card slightly
     setTimeout(() => {
-      event.target.style.opacity = '0.5';
+      if (target && target.isConnected) target.style.opacity = '0.5';
     }, 0);
-    event.target.addEventListener('dragend', () => {
-      event.target.style.opacity = '';
+    target.addEventListener('dragend', () => {
+      if (target && target.isConnected) target.style.opacity = '';
       this._igDragging = null;
     }, { once: true });
   },
@@ -1323,7 +1581,7 @@ const APP = {
   },
 
   igAddGroup(sid) {
-    const name = prompt('New folder name:');
+    const name = prompt(T('New folder name:'));
     if (!name || !name.trim()) return;
     const folderName = name.trim();
     const d = STATE.loaded[sid];
@@ -1380,33 +1638,37 @@ const APP = {
     const files = Object.entries(d.files || {}).filter(([fn]) => (families[fn] ?? '') === family);
     if (!files.length) return;
 
+    const safeFamily = family ? sanitizePathComponent(family) : '';
+
     if (typeof window.showDirectoryPicker === 'function') {
       try {
         const rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        const targetDir  = family
-          ? await rootHandle.getDirectoryHandle(family, { create: true })
+        const targetDir  = safeFamily
+          ? await rootHandle.getDirectoryHandle(safeFamily, { create: true })
           : rootHandle;
         for (const [fname, fdata] of files) {
-          const fh = await targetDir.getFileHandle(fname, { create: true });
+          const fh = await targetDir.getFileHandle(sanitizePathComponent(fname), { create: true });
           const wr = await fh.createWritable();
-          await wr.write(toYaml(fdata));
+          await wr.write(toYaml(_stripItemGenFile(fdata)));
           await wr.close();
         }
         return;
       } catch (err) {
         if (err.name === 'AbortError') return;
-        // fall through to ZIP
+        // Permission/quota/network — surface to the user instead of silently zipping.
+        alert(`Direct save failed (${err.name || 'error'}): ${err.message || err}\nFalling back to ZIP download.`);
       }
     }
 
     const z = new ZipBuilder();
     for (const [fname, fdata] of files) {
-      z.add(family ? `${family}/${fname}` : fname, toYaml(fdata));
+      const safeName = sanitizePathComponent(fname);
+      z.add(safeFamily ? `${safeFamily}/${safeName}` : safeName, toYaml(_stripItemGenFile(fdata)));
     }
     const blob = z.blob();
     const url  = URL.createObjectURL(blob);
     const a    = Object.assign(document.createElement('a'), {
-      href: url, download: family ? `${family}.zip` : 'items.zip',
+      href: url, download: safeFamily ? `${safeFamily}.zip` : 'items.zip',
     });
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
@@ -1425,30 +1687,33 @@ const APP = {
         const rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
         const dirCache   = {};
         for (const [fname, fdata] of files) {
-          const family = families[fname] ?? '';
+          const safeFamily = sanitizePathComponent(families[fname] ?? '');
+          const safeName   = sanitizePathComponent(fname);
           let targetDir;
-          if (family) {
-            if (!dirCache[family]) dirCache[family] = await rootHandle.getDirectoryHandle(family, { create: true });
-            targetDir = dirCache[family];
+          if (safeFamily && safeFamily !== '_') {
+            if (!dirCache[safeFamily]) dirCache[safeFamily] = await rootHandle.getDirectoryHandle(safeFamily, { create: true });
+            targetDir = dirCache[safeFamily];
           } else {
             targetDir = rootHandle;
           }
-          const fh = await targetDir.getFileHandle(fname, { create: true });
+          const fh = await targetDir.getFileHandle(safeName, { create: true });
           const wr = await fh.createWritable();
-          await wr.write(toYaml(fdata));
+          await wr.write(toYaml(_stripItemGenFile(fdata)));
           await wr.close();
         }
         return;
       } catch (err) {
         if (err.name === 'AbortError') return;
-        // fall through to ZIP
+        alert(`Direct save failed (${err.name || 'error'}): ${err.message || err}\nFalling back to ZIP download.`);
       }
     }
 
     const z = new ZipBuilder();
     for (const [fname, fdata] of files) {
-      const family = families[fname] ?? '';
-      z.add(family ? `${family}/${fname}` : fname, toYaml(fdata));
+      const safeFamily = sanitizePathComponent(families[fname] ?? '');
+      const safeName   = sanitizePathComponent(fname);
+      const path = (safeFamily && safeFamily !== '_') ? `${safeFamily}/${safeName}` : safeName;
+      z.add(path, toYaml(_stripItemGenFile(fdata)));
     }
     const blob = z.blob();
     const url  = URL.createObjectURL(blob);
@@ -1506,10 +1771,10 @@ const APP = {
    *
    * Pool entries added with defaults: { chance:0, scale-by-level:1.0, min:0, max:0, flat-range:false, round:false }
    */
-  igSync(sid, fname, loreFormatPath, poolPath, source, prefix) {
+  igSync(sid, fname, loreFormatPath, poolPath, source, prefix, _silent = false) {
     const ids = this._igResolveIds(source, sid, fname);
     if (!ids.length) {
-      alert('No entries found. Load the relevant stats section first (Damage, Defense, Penetration, etc.).');
+      if (!_silent) alert(T('No entries found. Load the relevant stats section first (Damage, Defense, Penetration, etc.).'));
       return;
     }
     const files = STATE.loaded[sid]?.files;
@@ -1546,7 +1811,7 @@ const APP = {
       if (!targetKeys.has(k) && !META_KEYS.has(k)) delete pool[k];
     });
 
-    renderSection(_activeSection);
+    if (!_silent) renderSection(_activeSection);
   },
 
   /** Add a raw entry to any plain-object section (ammo, hand, etc.) without STATS-specific logic. */
@@ -1555,7 +1820,7 @@ const APP = {
     if (!key) return;
     const data = STATE.loaded[sid];
     if (!data || typeof data !== 'object') return;
-    if (Object.prototype.hasOwnProperty.call(data, key)) { alert(`"${key}" already exists.`); return; }
+    if (Object.prototype.hasOwnProperty.call(data, key)) { alert(`"${key}" ${T('already exists.')}`); return; }
     data[key] = JSON.parse(JSON.stringify(template));
     renderSection(_activeSection);
   },
@@ -1563,28 +1828,28 @@ const APP = {
   /**
    * Sync socket lore-format AND pool for a single socket type (GEM / ESSENCE / RUNE).
    *
-   * Reads unique `tier` values from all loaded files in `modSid` (gems / essences / runes).
+   * Reads unique `target-requirements.socket` values from all loaded files in `modSid`.
    * - lore-format  → ['%SOCKET_GEM_COMMON%', '%SOCKET_GEM_RARE%', ...]
    * - pool entries → { common: { chance: 0 }, rare: { chance: 0 }, ... }
    *   (existing entries are not overwritten)
    */
-  igSyncSocket(sid, fname, type, modSid) {
+  igSyncSocket(sid, fname, type, modSid, _silent = false) {
     const modData = STATE.loaded[modSid];
     if (!modData?._multiFile || !modData.files) {
-      alert(`Load the ${modSid} section first so tier values can be read.`);
+      if (!_silent) alert(`Load the ${modSid} section first so socket-category values can be read.`);
       return;
     }
 
-    // Collect unique tier values from all files in the module
+    // Collect unique socket-category values (target-requirements.socket) from all files in the module
     const tiers = [...new Set(
       Object.values(modData.files)
-        .map(f => f?.tier)
+        .map(f => f?.['target-requirements']?.socket)
         .filter(Boolean)
-        .map(String)
+        .map(s => String(s).toLowerCase())
     )];
 
     if (!tiers.length) {
-      alert(`No tier values found in loaded ${modSid} files.`);
+      alert(`No socket-category values found in loaded ${modSid} files. Make sure each file has 'target-requirements.socket' set.`);
       return;
     }
 
@@ -1618,7 +1883,34 @@ const APP = {
       }
     });
     // Remove stale
-    Object.keys(pool).forEach(k => { if (!tierSet.has(k)) delete pool[k]; });
+    Object.keys(pool).forEach(k => { if (!tierSet.has(k.toLowerCase())) delete pool[k]; });
+
+    if (!_silent) renderSection(_activeSection);
+  },
+
+  /**
+   * Sync ALL stat pools and socket lore-formats for a single itemgen file in one go.
+   * Only syncs from sections that are actually loaded — silently skips missing ones.
+   */
+  igSyncAll(sid, fname) {
+    const run = (loreFormatPath, poolPath, source, prefix) => {
+      this.igSync(sid, fname, loreFormatPath, poolPath, source, prefix, true);
+    };
+    const runSocket = (type, modSid) => {
+      this.igSyncSocket(sid, fname, type, modSid, true);
+    };
+
+    const sl = STATE.loaded;
+    if (sl?.damage)           run('generator.damage-types.lore-format',                    'generator.damage-types.list',           'section:damage',           'DAMAGE_');
+    if (sl?.defense)          run('generator.defense-types.lore-format',                   'generator.defense-types.list',          'section:defense',          'DEFENSE_');
+    if (sl?.general)          run('generator.item-stats.lore-format',                       'generator.item-stats.list',             'section:general',          'ITEM_STAT_');
+    if (sl?.dmgbuff)          run('generator.item-stats.list-damage-buffs.lore-format',     'generator.item-stats.list-damage-buffs', 'section:dmgbuff',         'DAMAGE_BUFF_');
+    if (sl?.defbuff)          run('generator.item-stats.list-defense-buffs.lore-format',    'generator.item-stats.list-defense-buffs','section:defbuff',         'DEFENSE_BUFF_');
+    if (sl?.penetration)      run('generator.item-stats.list-penetration.lore-format',      'generator.item-stats.list-penetration',  'section:penetration',     'PENETRATION_');
+    if (sl?.fabledAttributes) run('generator.fabled-attributes.lore-format',                'generator.fabled-attributes.list',      'section:fabledAttributes', 'FABLED_ATTRIBUTE_');
+    runSocket('GEM',     'gems');
+    runSocket('ESSENCE', 'essences');
+    runSocket('RUNE',    'runes');
 
     renderSection(_activeSection);
   },
@@ -1640,8 +1932,9 @@ const APP = {
 
   /** Delete a template from ITEM_TEMPLATES and re-render the toolbar. */
   igDeleteTemplate(sid, tplKey) {
-    if (!tplKey) { alert('Select a template to delete first.'); return; }
-    if (!confirm(`Delete template "${tplKey}"?`)) return;
+    if (!tplKey) { alert(T('Select a template to delete first.')); return; }
+    if (tplKey.startsWith('__file__:')) { alert(T('To remove a file template, delete the file itself.')); return; }
+    if (!confirm(`${T('Delete template')} "${tplKey}"?`)) return;
     if (window.ITEM_TEMPLATES?.[sid]) {
       delete window.ITEM_TEMPLATES[sid][tplKey];
     }
@@ -1653,12 +1946,12 @@ const APP = {
   igSaveAsTemplate(sid, fname) {
     const files = STATE.loaded[sid]?.files;
     if (!files?.[fname]) return;
-    const name = prompt('Template name (used in the template dropdown):', fname.replace(/\.ya?ml$/i, ''));
+    const name = prompt(T('Template name (used in the template dropdown):'), fname.replace(/\.ya?ml$/i, ''));
     if (!name || !name.trim()) return;
     const key = name.trim();
     if (!window.ITEM_TEMPLATES) window.ITEM_TEMPLATES = {};
     if (!window.ITEM_TEMPLATES[sid]) window.ITEM_TEMPLATES[sid] = {};
-    if (window.ITEM_TEMPLATES[sid][key] && !confirm(`Template "${key}" already exists. Overwrite?`)) return;
+    if (window.ITEM_TEMPLATES[sid][key] && !confirm(`${T('Template')} "${key}" ${T('already exists. Overwrite?')}`)) return;
     window.ITEM_TEMPLATES[sid][key] = JSON.parse(JSON.stringify(files[fname]));
     renderSection(_activeSection);
   },
@@ -1669,8 +1962,10 @@ const APP = {
     const name = /\.ya?ml$/i.test(fname.trim()) ? fname.trim() : fname.trim() + '.yml';
     const d = STATE.loaded[sid];
     if (!d?._multiFile) return;
-    if (d.files[name]) { alert(`"${name}" already exists.`); return; }
-    const tpl = (window.ITEM_TEMPLATES?.[sid]?.[tplKey]) ?? {};
+    if (d.files[name]) { alert(`"${name}" ${T('already exists.')}`); return; }
+    const tpl = (window.ITEM_TEMPLATES?.[sid]?.[tplKey])
+        ?? (tplKey?.startsWith('__file__:') ? STATE.loaded[sid]?.files?.[tplKey.slice(9)] : null)
+        ?? {};
     d.files[name] = JSON.parse(JSON.stringify(tpl));
     updateBadge(sid);
     renderSection(_activeSection);
@@ -1687,7 +1982,7 @@ const APP = {
     }
     const k = String(key).trim();
     if (!k) return;
-    if (Object.prototype.hasOwnProperty.call(container, k)) { alert(`"${k}" already exists.`); return; }
+    if (Object.prototype.hasOwnProperty.call(container, k)) { alert(`"${k}" ${T('already exists.')}`); return; }
     container[k] = defaultValue;
     renderSection(_activeSection);
   },
@@ -1733,7 +2028,7 @@ const APP = {
   },
 
   async onIgAddInput(event, sid) {
-    const files = Array.from(event.target.files);
+    const files = Array.from(event.target.files).filter(f => /\.ya?ml$/i.test(f.name));
     for (const f of files) await loadMultiFile(sid, f);
     updateBadge(sid);
     renderSection(_activeSection);
@@ -1757,6 +2052,7 @@ const AUTOSAVE = {
   dirName:    '',       // display name of selected directory
   lastSaved:  null,     // Date of last successful save
   format:     'yaml',   // 'yaml' | 'json'
+  _saving:    false,    // re-entrancy guard for concurrent ticks
 };
 
 const LS_KEY = 'divinity-builder-autosave';
@@ -1782,7 +2078,7 @@ function persistSettings() {
 function applyAutoSaveTimer() {
   if (AUTOSAVE.timer) { clearInterval(AUTOSAVE.timer); AUTOSAVE.timer = null; }
   if (AUTOSAVE.interval > 0) {
-    AUTOSAVE.timer = setInterval(() => APP.autoSaveNow(), AUTOSAVE.interval * 60 * 1000);
+    AUTOSAVE.timer = setInterval(() => APP.autoSaveNow({ manual: false }), AUTOSAVE.interval * 60 * 1000);
   }
 }
 
@@ -1792,18 +2088,18 @@ function refreshAutoSaveStatus() {
   if (!el) return;
 
   if (AUTOSAVE.interval === 0) {
-    el.innerHTML = '<span class="as-off">⏸ Auto-save disabled (interval = 0).</span>';
+    el.innerHTML = `<span class="as-off">⏸ ${T('Auto-save disabled (interval = 0).')}</span>`;
     return;
   }
 
   const dirInfo = AUTOSAVE.dirHandle
     ? `📁 <b>${AUTOSAVE.dirName}</b>`
-    : '⚠️ No directory selected — will download a JSON snapshot instead.';
+    : `⚠️ ${T('No directory selected — will download a JSON snapshot instead.')}`;
   const lastInfo = AUTOSAVE.lastSaved
-    ? ` &nbsp;·&nbsp; Last saved: <b>${AUTOSAVE.lastSaved.toLocaleTimeString()}</b>`
+    ? ` &nbsp;·&nbsp; ${T('Last saved')}: <b>${AUTOSAVE.lastSaved.toLocaleTimeString()}</b>`
     : '';
 
-  el.innerHTML = `<span class="as-on">⏱ Auto-saving every <b>${AUTOSAVE.interval} min</b>. ${dirInfo}${lastInfo}</span>`;
+  el.innerHTML = `<span class="as-on">⏱ ${T('Auto-saving every')} <b>${AUTOSAVE.interval} ${T('min')}</b>. ${dirInfo}${lastInfo}</span>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1816,47 +2112,60 @@ function buildSettingsSection() {
 
   const sectionList = Object.values(SCHEMA.sections)
     .filter(s => s.file && STATE.loaded[s.id])
-    .map(s => `<li><code>${s.file.split('/').pop()}</code> — ${s.label}</li>`)
+    .map(s => `<li><code>${s.file.split('/').pop()}</code> — ${T(s.label)}</li>`)
     .join('');
 
   const loadedCount = Object.keys(STATE.loaded).length;
 
   return `
     <div class="section-header">
-      <div class="section-title">${def.icon} ${def.label}</div>
-      <div class="section-desc">${def.description}</div>
+      <div class="section-title">${def.icon} ${T(def.label)}</div>
+      <div class="section-desc">${T(def.description)}</div>
+    </div>
+
+    <!-- ── Build mode (Vanilla / Modded) ───────────────────── -->
+    <div class="settings-card">
+      <h3>${T('Build mode')}</h3>
+      <p class="muted small" style="margin-bottom:8px">
+        ${T('Vanilla = base Divinity. Modded (Lotus) = full feature set with buffs/penetration/custom formula.')}
+      </p>
+      <div class="settings-row">
+        <button class="btn-setting ${MODE === 'vanilla' ? 'btn-export' : ''}"
+          onclick="APP.setMode('vanilla')">${MODE === 'vanilla' ? '✓ ' : ''}${T('Vanilla')}</button>
+        <button class="btn-setting ${MODE === 'modded' ? 'btn-export' : ''}"
+          onclick="APP.setMode('modded')">${MODE === 'modded' ? '✓ ' : ''}${T('Modded (Lotus)')}</button>
+      </div>
     </div>
 
     <!-- ── Export ─────────────────────────────────────────── -->
     <div class="settings-card">
-      <h3>Export</h3>
+      <h3>${T('Export')}</h3>
       <p class="muted small" style="margin-bottom:12px">
-        Download all currently-loaded sections as a single JSON snapshot.
-        You can re-import it later to restore the full editor state in one click.
+        ${T('Download all currently-loaded sections as a single JSON snapshot. You can re-import it later to restore the full editor state in one click.')}
       </p>
 
       ${loadedCount === 0
-        ? '<div class="alert alert-warn">⚠️ No files loaded yet. Load YAML files in <b>Load Files</b> first.</div>'
+        ? `<div class="alert alert-warn">⚠️ ${T('No files loaded yet. Load YAML files in <b>Load Files</b> first.')}</div>`
         : `<ul class="loaded-list">${sectionList}</ul>`}
 
       <div class="settings-row" style="margin-top:12px">
         <button class="btn-setting btn-export" onclick="APP.downloadAllJson()"
                 ${loadedCount === 0 ? 'disabled' : ''}>
-          ⬇ Download all as JSON
+          ⬇ ${T('Download all as JSON')}
         </button>
-        <span class="muted small">Includes all ${loadedCount} loaded section(s).</span>
+        <span class="muted small">${T('Includes all')} ${loadedCount} ${T('loaded section(s).')}</span>
       </div>
     </div>
 
     <!-- ── Import ─────────────────────────────────────────── -->
     <div class="settings-card">
-      <h3>Import snapshot</h3>
+      <h3>${T('Import snapshot')}</h3>
       <p class="muted small" style="margin-bottom:12px">
-        Load a previously exported JSON snapshot. Restores all sections at once.
+        ${T('Load a previously exported JSON snapshot. Restores all sections at once.')}
       </p>
       <div class="settings-row">
         <label class="btn-setting btn-import">
-          📂 Load JSON snapshot
+          📂 ${T('Load JSON snapshot')}
           <input type="file" accept=".json" style="display:none"
                  onchange="APP.importJsonFromInput(event)">
         </label>
@@ -1865,47 +2174,45 @@ function buildSettingsSection() {
 
     <!-- ── Auto-save ──────────────────────────────────────── -->
     <div class="settings-card">
-      <h3>Auto-save</h3>
+      <h3>${T('Auto-save')}</h3>
 
       <div class="settings-row">
-        <label class="settings-label">Save interval (minutes)</label>
+        <label class="settings-label">${T('Save interval (minutes)')}</label>
         <input class="edit-input edit-input--num" type="number" min="0" step="1"
                value="${AUTOSAVE.interval}" style="width:80px"
                oninput="APP.setAutoSaveInterval(+this.value)">
-        <span class="muted small">0 = disabled</span>
+        <span class="muted small">${T('0 = disabled')}</span>
       </div>
 
       <div class="settings-row">
-        <label class="settings-label">Format</label>
+        <label class="settings-label">${T('Format')}</label>
         <label class="radio-label">
           <input type="radio" name="as-format" value="yaml"
                  ${AUTOSAVE.format === 'yaml' ? 'checked' : ''}
                  onchange="APP.setAutoSaveFormat('yaml')">
-          YAML (individual files)
+          ${T('YAML (individual files)')}
         </label>
         <label class="radio-label">
           <input type="radio" name="as-format" value="json"
                  ${AUTOSAVE.format === 'json' ? 'checked' : ''}
                  onchange="APP.setAutoSaveFormat('json')">
-          JSON snapshot
+          ${T('JSON snapshot')}
         </label>
       </div>
 
       ${AUTOSAVE.format === 'yaml' ? `
       <div class="settings-row">
-        <label class="settings-label">Save directory</label>
+        <label class="settings-label">${T('Save directory')}</label>
         ${fsApiAvailable ? `
           <button class="btn-setting" onclick="APP.pickDirectory()">
-            📁 ${AUTOSAVE.dirHandle ? `Change (current: <b>${AUTOSAVE.dirName}</b>)` : 'Select directory…'}
+            📁 ${AUTOSAVE.dirHandle ? `${T('Change (current:')} <b>${AUTOSAVE.dirName}</b>)` : T('Select directory…')}
           </button>
           ${!AUTOSAVE.dirHandle
-            ? '<span class="muted small">No directory selected.</span>'
-            : `<span class="muted small">Files will be saved to: <b>${AUTOSAVE.dirName}</b></span>`}
+            ? `<span class="muted small">${T('No directory selected.')}</span>`
+            : `<span class="muted small">${T('Files will be saved to:')} <b>${AUTOSAVE.dirName}</b></span>`}
         ` : `
           <span class="alert alert-warn" style="display:inline-block">
-            ⚠️ File System Access API is not supported in this browser.
-            YAML auto-save will trigger individual downloads instead.
-            Use Chrome or Edge for directory-based saving.
+            ⚠️ ${T('File System Access API is not supported in this browser. YAML auto-save will trigger individual downloads instead. Use Chrome or Edge for directory-based saving.')}
           </span>
         `}
       </div>` : ''}
@@ -1917,10 +2224,10 @@ function buildSettingsSection() {
       <div class="settings-row" style="gap:8px">
         <button class="btn-setting btn-save-now" onclick="APP.autoSaveNow()"
                 ${loadedCount === 0 ? 'disabled' : ''}>
-          💾 Save now
+          💾 ${T('Save now')}
         </button>
         ${AUTOSAVE.interval > 0
-          ? '<button class="btn-setting btn-stop" onclick="APP.setAutoSaveInterval(0);APP.navigate(\'settings\')">⏹ Stop auto-save</button>'
+          ? `<button class="btn-setting btn-stop" onclick="APP.setAutoSaveInterval(0);APP.navigate('settings')">⏹ ${T('Stop auto-save')}</button>`
           : ''}
       </div>
     </div>`;
@@ -1942,6 +2249,7 @@ Object.assign(APP, {
       exported: new Date().toISOString(),
       sections: {},
     };
+    // Note: keep _multiFile/_families/_collapsed because the importer relies on them.
     Object.entries(STATE.loaded).forEach(([sid, data]) => {
       snapshot.sections[sid] = data;
     });
@@ -1968,7 +2276,7 @@ Object.assign(APP, {
       try {
         const snapshot = JSON.parse(e.target.result);
         if (!snapshot.sections || typeof snapshot.sections !== 'object') {
-          alert('Invalid snapshot: missing "sections" key.');
+          alert(T('Invalid snapshot: missing "sections" key.'));
           return;
         }
         let count = 0;
@@ -1993,10 +2301,10 @@ Object.assign(APP, {
           updateBadge(sid);
           count++;
         });
-        alert(`✅ Imported ${count} section(s) from snapshot (v${snapshot.version || '?'}, exported ${snapshot.exported || 'unknown'}).`);
+        alert(`✅ ${T('Imported')} ${count} ${T('section(s) from snapshot (v')}${snapshot.version || '?'}, ${T('exported')} ${snapshot.exported || T('unknown')}).`);
         renderSection(_activeSection);
       } catch (err) {
-        alert('❌ Failed to parse JSON: ' + err.message);
+        alert('❌ ' + T('Failed to parse JSON: ') + err.message);
       }
     };
     reader.readAsText(file, 'UTF-8');
@@ -2009,7 +2317,7 @@ Object.assign(APP, {
   /** Open the File System Access API directory picker. */
   async pickDirectory() {
     if (typeof window.showDirectoryPicker !== 'function') {
-      alert('File System Access API is not supported in this browser.\nUse Chrome or Edge.');
+      alert(T('File System Access API is not supported in this browser.\nUse Chrome or Edge.'));
       return;
     }
     try {
@@ -2018,7 +2326,7 @@ Object.assign(APP, {
       AUTOSAVE.dirName   = handle.name;
       renderSection('settings'); // re-render to show new dir name
     } catch (err) {
-      if (err.name !== 'AbortError') alert('Could not open directory: ' + err.message);
+      if (err.name !== 'AbortError') alert(T('Could not open directory: ') + err.message);
     }
   },
 
@@ -2043,12 +2351,20 @@ Object.assign(APP, {
    *  - If format='yaml' and no dirHandle       → trigger individual downloads
    *  - If format='json'                         → download JSON snapshot
    */
-  async autoSaveNow() {
+  async autoSaveNow(opts) {
+    const isManual = !opts || opts.manual !== false;
+    if (AUTOSAVE._saving) {
+      // Prevent overlapping saves (slow I/O could otherwise stack writes).
+      if (isManual) alert(T('Save already in progress — please wait.'));
+      return;
+    }
+    AUTOSAVE._saving = true;
+    try {
     const loadedSections = Object.entries(STATE.loaded)
       .filter(([sid]) => SCHEMA.sections[sid]?.file);
 
     if (loadedSections.length === 0) {
-      alert('Nothing to save — no YAML files are loaded yet.');
+      if (isManual) alert(T('Nothing to save — no YAML files are loaded yet.'));
       return;
     }
 
@@ -2070,26 +2386,27 @@ Object.assign(APP, {
           const families = data._families || {};
           for (const [fname, fdata] of Object.entries(data.files || {})) {
             try {
-              const family = families[fname] ?? '';
+              const safeFamily = sanitizePathComponent(families[fname] ?? '');
+              const safeName   = sanitizePathComponent(fname);
               let targetDir = AUTOSAVE.dirHandle;
-              if (family) {
-                // Create subfolder if it doesn't exist
-                targetDir = await AUTOSAVE.dirHandle.getDirectoryHandle(family, { create: true });
+              if (safeFamily && safeFamily !== '_') {
+                targetDir = await AUTOSAVE.dirHandle.getDirectoryHandle(safeFamily, { create: true });
               }
-              const fh = await targetDir.getFileHandle(fname, { create: true });
+              const fh = await targetDir.getFileHandle(safeName, { create: true });
               const wr = await fh.createWritable();
-              await wr.write(toYaml(fdata));
+              await wr.write(toYaml(_stripItemGenFile(fdata)));
               await wr.close();
               saved++;
             } catch (err) { console.error(`Failed to save ${fname}:`, err); failed++; }
           }
           continue;
         }
-        const fname = def.file.split('/').pop();
+        const fname = sanitizePathComponent(getSectionFile(def).split('/').pop());
         try {
           const fileHandle = await AUTOSAVE.dirHandle.getFileHandle(fname, { create: true });
           const writable   = await fileHandle.createWritable();
-          await writable.write(toYaml(data));
+          const outData = sid === 'formula' ? _stripFormulaFile(data) : data;
+          await writable.write(toYaml(outData));
           await writable.close();
           saved++;
         } catch (err) {
@@ -2099,7 +2416,7 @@ Object.assign(APP, {
       }
       AUTOSAVE.lastSaved = new Date();
       refreshAutoSaveStatus();
-      if (failed > 0) alert(`⚠️ Saved ${saved} file(s), but ${failed} failed. Check console.`);
+      if (failed > 0 && isManual) alert(`⚠️ Saved ${saved} file(s), but ${failed} failed. Check console.`);
     } else {
       // No dir — trigger individual downloads
       for (const [sid, data] of loadedSections) {
@@ -2108,10 +2425,11 @@ Object.assign(APP, {
           Object.keys(data.files || {}).forEach(fname => this.igDownload(sid, fname));
           continue;
         }
-        const blob = new Blob([toYaml(data)], { type: 'text/yaml;charset=utf-8' });
+        const outData = sid === 'formula' ? _stripFormulaFile(data) : data;
+        const blob = new Blob([toYaml(outData)], { type: 'text/yaml;charset=utf-8' });
         const url  = URL.createObjectURL(blob);
         const a    = Object.assign(document.createElement('a'), {
-          href: url, download: def.file.split('/').pop(),
+          href: url, download: getSectionFile(def).split('/').pop(),
         });
         document.body.appendChild(a);
         a.click();
@@ -2120,6 +2438,9 @@ Object.assign(APP, {
       }
       AUTOSAVE.lastSaved = new Date();
       refreshAutoSaveStatus();
+    }
+    } finally {
+      AUTOSAVE._saving = false;
     }
   },
 });
