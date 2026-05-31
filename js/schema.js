@@ -42,7 +42,7 @@ const SCHEMA = {
     },
     {
       label: 'Stats',
-      sections: ['damage', 'defense', 'general', 'penetration', 'dmgbuff', 'defbuff', 'ammo', 'hand'],
+      sections: ['damage', 'defense', 'general', 'penetration', 'dmgbuff', 'defbuff', 'customstats', 'ammo', 'hand'],
     },
     {
       label: 'Modules',
@@ -151,6 +151,18 @@ const SCHEMA = {
       file:       'item_stats/stats/defense_buffs_percent.yml',
       renderer:   'renderBuffs',
       description: 'Percentage defense buffs per defense type.',
+    },
+
+    customstats: {
+      id:         'customstats',
+      label:      'Custom Stats',
+      icon:       '🧩',
+      badge:      true,
+      searchable: true,
+      modes:      ['modded'],
+      file:       'item_stats/stats/custom_stats.yml',
+      renderer:   'renderCustomStats',
+      description: 'Fully data-driven custom stats. Add entry here → placeholder %Divinity_customstat_<id>% works immediately.',
     },
 
     itemgen: {

@@ -57,7 +57,7 @@ function isVanilla() { return MODE === 'vanilla'; }
 
 /**
  * Recursively strip modded-only fields from item-generator data.
- * Removes item-stats.list-damage-buffs, list-defense-buffs, list-penetration.
+ * Removes item-stats.list-damage-buffs, list-defense-buffs, list-penetration, list-custom-stats.
  * Used at YAML serialization time when MODE=vanilla.
  */
 function stripModdedFieldsForYaml(sid, data) {
@@ -85,6 +85,7 @@ function _stripItemGenFile(d) {
     delete stats['list-damage-buffs'];
     delete stats['list-defense-buffs'];
     delete stats['list-penetration'];
+    delete stats['list-custom-stats'];
   }
   return out;
 }

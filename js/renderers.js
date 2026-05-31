@@ -291,7 +291,7 @@ const ITEM_TEMPLATES = {
         '%ITEM_SET%',
         '', '%GENERATOR_SKILLS%',
         '%GENERATOR_DEFENSE%', '%GENERATOR_DAMAGE%',
-        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%',
+        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%', '%GENERATOR_CUSTOM_STATS%',
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
@@ -398,11 +398,7 @@ const ITEM_TEMPLATES = {
             '%ITEM_STAT_DURABILITY%', '',
             '%ITEM_STAT_SCALE%', '%ITEM_STAT_KNOCKBACK_RESISTANCE%',
             '%ITEM_STAT_HEALING_CAST%', '%ITEM_STAT_ARMOR%', '%ITEM_STAT_CC_RESISTANCE%',
-            '%ITEM_STAT_HEALING_RECEIVED%', '%ITEM_STAT_CC_DURATION%', '',
-            '%ITEM_STAT_SKILL_EFFECTIVNESS%', '%ITEM_STAT_SUMMON_POWER%', '%ITEM_STAT_SUMMON_HP%', '%ITEM_STAT_SUMMON_DURATION%', '',
-            '%ITEM_STAT_PROJECTILE_COUNT%', '%ITEM_STAT_PROJECTILE_SPEED%', '',
-            '%ITEM_STAT_BLEED_STACKS%', '%ITEM_STAT_BLEED_DURATION%', '%ITEM_STAT_BLEED_DAMAGEBUFF%',
-            '%ITEM_STAT_STUN_STACKS%', '%ITEM_STAT_STUN_DURATION%',
+            '%ITEM_STAT_HEALING_RECEIVED%', '%ITEM_STAT_CC_DURATION%',
           ],
           list: {
             critical_rate:        { chance: 20.0,  'scale-by-level': 1.025, min: 3.0,  max: 6.25,  'flat-range': false, round: false },
@@ -443,17 +439,6 @@ const ITEM_TEMPLATES = {
             cc_resistance:        { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
             healing_received:     { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
             cc_duration:          { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            skill_effectivness:   { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            summon_power:         { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            summon_hp:            { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            summon_duration:      { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            projectile_count:     { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            projectile_speed:     { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            bleed_stacks:         { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            bleed_duration:       { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            bleed_damagebuff:     { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            stun_stacks:          { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
-            stun_duration:        { chance: 0.0,   'scale-by-level': 1.0,   min: 0,    max: 0,     'flat-range': false, round: false },
           },
           'list-damage-buffs': {
             'lore-format': [
@@ -529,6 +514,25 @@ const ITEM_TEMPLATES = {
             earth_pen:       { chance: 0.0, 'scale-by-level': 1.0, min: 0.0, max: 0.0, 'flat-range': false, round: false },
             dummy_pen:       { chance: 0.0, 'scale-by-level': 1.0, min: 0.0, max: 0.0, 'flat-range': false, round: false },
           },
+          'list-custom-stats': {
+            'lore-format': [
+              '%CUSTOM_STAT_SKILL_EFFECTIVNESS%', '%CUSTOM_STAT_SUMMON_POWER%', '%CUSTOM_STAT_SUMMON_HP%', '%CUSTOM_STAT_SUMMON_DURATION%',
+              '%CUSTOM_STAT_PROJECTILE_COUNT%', '%CUSTOM_STAT_PROJECTILE_SPEED%',
+              '%CUSTOM_STAT_BLEED_STACKS%', '%CUSTOM_STAT_BLEED_DURATION%', '%CUSTOM_STAT_BLEED_DAMAGEBUFF%',
+              '%CUSTOM_STAT_STUN_STACKS%', '%CUSTOM_STAT_STUN_DURATION%',
+            ],
+            skill_effectivness: { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            summon_power:       { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            summon_hp:          { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            summon_duration:    { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            projectile_count:   { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            projectile_speed:   { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            bleed_stacks:       { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            bleed_duration:     { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            bleed_damagebuff:   { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            stun_stacks:        { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+            stun_duration:      { chance: 0.0, 'scale-by-level': 1.0, min: 0, max: 0, 'flat-range': false, round: false },
+          },
         },
         'fabled-attributes': {
           minimum: 1, maximum: 4,
@@ -588,7 +592,7 @@ const ITEM_TEMPLATES = {
         '%ITEM_SET%',
         '', '%GENERATOR_SKILLS%',
         '%GENERATOR_DEFENSE%', '%GENERATOR_DAMAGE%',
-        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%',
+        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%', '%GENERATOR_CUSTOM_STATS%',
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
@@ -626,7 +630,7 @@ const ITEM_TEMPLATES = {
         '%ITEM_SET%',
         '', '%GENERATOR_SKILLS%',
         '%GENERATOR_DEFENSE%', '%GENERATOR_DAMAGE%',
-        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%',
+        '%GENERATOR_DAMAGE_BUFFS%', '%GENERATOR_DEFENSE_BUFFS%', '%GENERATOR_PENETRATION%', '%GENERATOR_CUSTOM_STATS%',
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
@@ -1365,9 +1369,8 @@ const GENERAL_STAT_CATEGORIES = [
   { name: 'Defense',    icon: '🛡️',  ids: ['ARMOR','ARMOR_TOUGHNESS','KNOCKBACK_RESISTANCE','EXPLOSION_KNOCKBACK_RESISTANCE','PVP_DEFENSE','PVE_DEFENSE','THORNMAIL','CC_RESISTANCE','CC_DURATION'] },
   { name: 'Health',     icon: '❤️',  ids: ['MAX_HEALTH','HEALTH_REGEN','MAX_ABSORPTION','HEALING_CAST','HEALING_RECEIVED','VAMPIRISM','FALL_DAMAGE_MULTIPLIER','SAFE_FALL_DISTANCE'] },
   { name: 'Movement',   icon: '💨',  ids: ['MOVEMENT_SPEED','FLYING_SPEED','JUMP_STRENGTH','GRAVITY','STEP_HEIGHT','WATER_MOVEMENT_EFFICIENCY','MOVEMENT_EFFICIENCY','SNEAKING_SPEED','SCALE'] },
-  { name: 'Magic',      icon: '🔮',  ids: ['SKILL_EFFECTIVNESS','MAX_MANA','MANA_REGEN','SUMMON_HP','SUMMON_POWER','SUMMON_DURATION'] },
-  { name: 'Projectile', icon: '🏹',  ids: ['PROJECTILE_COUNT','PROJECTILE_SPEED'] },
-  { name: 'Status',     icon: '🩸',  ids: ['BLEED_RATE','BLEED_STACKS','BLEED_DURATION','BLEED_DAMAGEBUFF','STUN_STACKS','STUN_DURATION'] },
+  { name: 'Magic',      icon: '🔮',  ids: ['MAX_MANA','MANA_REGEN'] },
+  { name: 'Status',     icon: '🩸',  ids: ['BLEED_RATE'] },
   { name: 'Utility',    icon: '⛏️',  ids: ['DURABILITY','SALE_PRICE','MINING_EFFICIENCY','BLOCK_BREAK_SPEED','BLOCK_INTERACTION_RANGE','ENTITY_INTERACTION_RANGE','OXYGEN_BONUS','SUBMERGED_MINING_SPEED'] },
 ];
 const GENERAL_STAT_OTHER   = { name: 'Other',   icon: '🔧' };
@@ -1375,15 +1378,14 @@ const GENERAL_STAT_UNKNOWN = { name: 'Unknown', icon: '⚠️' };
 
 // Mirror of divinity TypedStat.Type enum (divinity/stats/items/attributes/api/TypedStat.java).
 // Used to flag stats in user's general_stats.yml that the plugin will not recognize.
-// Last sync: 2026-05-21 (65 entries)
+// Last sync: 2026-05-31 (54 entries — 11 //PLACEHOLDERS moved to custom_stats.yml)
 const KNOWN_PLUGIN_STATS = new Set([
   'ARMOR','ARMOR_TOUGHNESS','ATTACK_SPEED','BASE_ATTACK_SPEED','KNOCKBACK_RESISTANCE','MAX_HEALTH','MOVEMENT_SPEED',
   'AOE_DAMAGE','PVP_DAMAGE','PVE_DAMAGE','DODGE_RATE','ACCURACY_RATE','BLOCK_RATE','BLOCK_DAMAGE','LOOT_RATE','BURN_RATE',
   'PVP_DEFENSE','PVE_DEFENSE','CRITICAL_RATE','CRITICAL_DAMAGE','SKILL_CRITICAL_RATE','SKILL_CRITICAL_DAMAGE',
   'DURABILITY','PENETRATION','VAMPIRISM','BLEED_RATE','DISARM_RATE','SALE_PRICE','THORNMAIL','HEALTH_REGEN',
-  'MANA_REGEN','MAX_MANA','CC_RESISTANCE','CC_DURATION','HEALING_CAST','HEALING_RECEIVED','SKILL_EFFECTIVNESS',
-  'SUMMON_POWER','SUMMON_HP','SUMMON_DURATION','PROJECTILE_COUNT','PROJECTILE_SPEED',
-  'BLEED_STACKS','BLEED_DURATION','BLEED_DAMAGEBUFF','STUN_STACKS','STUN_DURATION','SCALE',
+  'MANA_REGEN','MAX_MANA','CC_RESISTANCE','CC_DURATION','HEALING_CAST','HEALING_RECEIVED',
+  'SCALE',
   'WATER_MOVEMENT_EFFICIENCY','MOVEMENT_EFFICIENCY','SNEAKING_SPEED',
   'BLOCK_BREAK_SPEED','BLOCK_INTERACTION_RANGE','ENTITY_INTERACTION_RANGE','EXPLOSION_KNOCKBACK_RESISTANCE',
   'FALL_DAMAGE_MULTIPLIER','FLYING_SPEED','GRAVITY','JUMP_STRENGTH','MAX_ABSORPTION','MINING_EFFICIENCY',
@@ -1400,7 +1402,6 @@ function _categoryForStat(id) {
 
 function renderGeneralStats(data, sid) {
   const entries = Object.entries(data).filter(([, v]) => v && typeof v === 'object');
-  const TPL = { name: 'New Stat', format: '&7%value%', capacity: 200, enabled: true };
 
   // Group by category, sort alphabetically inside each
   const grouped = new Map();
@@ -1449,7 +1450,7 @@ function renderGeneralStats(data, sid) {
 
   const totalCount = entries.length;
   return `
-    <div class="entry-actions">${isVanilla() ? '' : addEntryBtn(sid, TPL, 'Add stat')}</div>
+    <div class="entry-actions"><span class="muted small">${T('General stats are a fixed set (TypedStat enum) — you can configure existing entries but not add new ones. To create a new data-driven stat, use Custom Stats.')}</span></div>
     <input class="search-input" type="text" placeholder="🔍 ${T('Search stats by ID, name, category…')}"
            oninput="APP.filterGeneralStats('tbl-general',this.value)">
     <p class="muted small" style="margin:4px 0 8px">${totalCount} ${T('stats total. Grouped by category, alphabetical within.')}</p>
@@ -1605,6 +1606,61 @@ function renderPenetration(data, sid) {
 // ---------------------------------------------------------------------------
 // Damage / Defense Buffs — shared, card layout
 // ---------------------------------------------------------------------------
+
+function renderCustomStats(data, sid) {
+  const entries = Object.entries(data).filter(([, v]) => v && typeof v === 'object');
+
+  const TPL = {
+    name: 'New Custom Stat',
+    format: '&a▸ %name%: &f%value% %condition%',
+    capacity: -1,
+    percent: false,
+    'can-negate': true,
+    enabled: true,
+  };
+
+  const cards = entries.map(([id, st]) => {
+    const enabled = st.enabled !== false;
+    const enId    = safeId(sid, id, 'en');
+    const pcId    = safeId(sid, id, 'pc');
+    const cnId    = safeId(sid, id, 'cn');
+    const isNew   = (SYNCED_NEW[sid] || new Set()).has(id);
+    return `
+      <div class="item-card${isNew ? ' entry-new' : ''}${enabled ? '' : ' card-disabled'}">
+        <details class="card-details" data-key="${esc(sid)}-card-${esc(id)}" open>
+          <summary class="item-card__header">
+            <span class="item-card__icon">🧩</span>
+            ${editId(sid, id)}
+            ${liveBadge(enabled, enId, 'enabled')}
+            ${isNew ? '<span class="badge badge-blue">new</span>' : ''}
+            ${removeEntryBtn(sid, id)}
+          </summary>
+          <div class="item-card__body">
+            ${cardRow(T('Name'),       editTextName(sid, `${id}.name`, st.name ?? id, id))}
+            ${cardRow(T('Capacity (-1 = uncapped)'), editNum(sid, `${id}.capacity`, st.capacity ?? -1, 'edit-input--inline'))}
+            ${cardRowFormat(sid, id, st.format ?? '', st.name ?? id)}
+            ${cardRow(T('Percent (%)'),  liveCheck(sid, `${id}.percent`,    st.percent === true,        pcId, 'percent'))}
+            ${cardRow(T('Can negate'),   liveCheck(sid, `${id}.can-negate`, st['can-negate'] !== false, cnId, 'can-negate'))}
+            ${cardRow(T('Enabled'),      liveCheck(sid, `${id}.enabled`,    enabled,                    enId, 'enabled'))}
+            <div class="info-row" style="font-size:11px;color:#8fb8ea">
+              <span class="info-label">${T('Placeholder')}</span>
+              <code>%Divinity_customstat_${esc(id)}%</code>
+            </div>
+            <div class="info-row" style="font-size:11px;color:#8fb8ea">
+              <span class="info-label">${T('Fabled scale key')}</span>
+              <code>custom_${esc(id)}</code>
+            </div>
+          </div>
+        </details>
+      </div>`;
+  }).join('');
+
+  const empty = `<div class="empty-state">${T('No entries. Add one — placeholder works immediately after server reload.')}</div>`;
+
+  return `
+    <div class="entry-actions">${addEntryBtn(sid, TPL, 'Add custom stat')} ${collapseAllBtn()}</div>
+    <div class="cards-grid">${cards || empty}</div>`;
+}
 
 function renderBuffs(data, sid) {
   const entries = Object.entries(data).filter(([, v]) => v && typeof v === 'object');
@@ -2292,6 +2348,7 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
   const dmgBuf = groupData['list-damage-buffs']  ?? {};
   const defBuf = groupData['list-defense-buffs'] ?? {};
   const pen    = groupData['list-penetration']   ?? {};
+  const cust   = groupData['list-custom-stats']  ?? {};
   const active = Object.entries(list).filter(([, v]) => (v?.chance ?? 0) > 0).length;
 
   const tgId      = `istats-${sid}-${fname.replace(/[^a-z0-9]/gi, '_')}-${basePath.replace(/[^a-z0-9]/gi, '_')}`;
@@ -2337,6 +2394,7 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
       ${isVanilla() ? '' : tabBtn('dmgbuffs', `🔥 ${T('Damage buffs %')}`)}
       ${isVanilla() ? '' : tabBtn('defbuffs', `🛡 ${T('Defense buffs %')}`)}
       ${isVanilla() ? '' : tabBtn('pen',      `🎯 ${T('Penetration')}`)}
+      ${isVanilla() ? '' : tabBtn('customstats', `🧩 ${T('Custom stats')}`)}
     </div>
     <div style="border:1px solid #333;border-radius:0 4px 4px 4px;padding:8px">
       ${tabPanel('general',
@@ -2351,6 +2409,9 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
       ${isVanilla() ? '' : tabPanel('pen',
           tabContent(`${basePath}.list-penetration.lore-format`,   pen['lore-format'] ?? [],
                      `${basePath}.list-penetration`,         pen,    'section:penetration',  'PENETRATION_',  'pen'))}
+      ${isVanilla() ? '' : tabPanel('customstats',
+          tabContent(`${basePath}.list-custom-stats.lore-format`,  cust['lore-format'] ?? [],
+                     `${basePath}.list-custom-stats`,        cust,   'section:customstats',  'CUSTOM_STAT_',  'customstats'))}
     </div>`;
 
   return igCollapsible(
@@ -5497,6 +5558,7 @@ const RENDERERS = {
   renderDefense,
   renderPenetration,
   renderBuffs,
+  renderCustomStats,
   renderItemGenerator,
   renderSets,
   renderGems,

@@ -923,6 +923,7 @@ const APP = {
       penetration: {},
       dmgbuff:     {},
       defbuff:     {},
+      customstats: {},
     };
     if (!DEFAULTS[sid]) return;
     STATE.loaded[sid] = JSON.parse(JSON.stringify(DEFAULTS[sid]));
@@ -1907,6 +1908,7 @@ const APP = {
     if (sl?.dmgbuff)          run('generator.item-stats.list-damage-buffs.lore-format',     'generator.item-stats.list-damage-buffs', 'section:dmgbuff',         'DAMAGE_BUFF_');
     if (sl?.defbuff)          run('generator.item-stats.list-defense-buffs.lore-format',    'generator.item-stats.list-defense-buffs','section:defbuff',         'DEFENSE_BUFF_');
     if (sl?.penetration)      run('generator.item-stats.list-penetration.lore-format',      'generator.item-stats.list-penetration',  'section:penetration',     'PENETRATION_');
+    if (sl?.customstats)      run('generator.item-stats.list-custom-stats.lore-format',     'generator.item-stats.list-custom-stats', 'section:customstats',     'CUSTOM_STAT_');
     if (sl?.fabledAttributes) run('generator.fabled-attributes.lore-format',                'generator.fabled-attributes.list',      'section:fabledAttributes', 'FABLED_ATTRIBUTE_');
     runSocket('GEM',     'gems');
     runSocket('ESSENCE', 'essences');
