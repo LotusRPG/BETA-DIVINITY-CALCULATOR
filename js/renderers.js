@@ -135,6 +135,14 @@ function editText(sid, path, val, cls = '') {
     oninput="APP.updateField('${sid}','${escJs(path)}',this.value)">`;
 }
 
+/** Single-file text field + live MC-color preview underneath (no re-render). */
+function editTextPrev(sid, path, val) {
+  const pid = `sprev-${(sid + path).replace(/[^a-z0-9]/gi, '_').slice(0, 60)}`;
+  return `<input class="edit-input edit-input--format" type="text" value="${esc(val ?? '')}"
+    oninput="APP.updateField('${sid}','${escJs(path)}',this.value);updateLinePreview(this,'${pid}')">
+  <div id="${pid}" class="lore-preview" style="margin-bottom:4px">${mc.toHtml(mc.resolve(String(val ?? ''), {}))}</div>`;
+}
+
 function editNum(sid, path, val, cls = '') {
   return `<input class="edit-input edit-input--num ${cls}" type="number" value="${esc(val)}"
     oninput="APP.updateField('${sid}','${escJs(path)}',+this.value)">`;
@@ -295,7 +303,7 @@ const ITEM_TEMPLATES = {
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
-      color: '-1,-1,-1', unbreakable: false, 'item-flags': ['*'], tier: 'common',
+      color: '-1,-1,-1', unbreakable: false, 'fire-resistant': false, 'item-flags': ['*'], tier: 'common',
       level: { min: 1, max: 50 },
       generator: {
         'prefix-chance': 100.0, 'suffix-chance': 100.0,
@@ -596,7 +604,7 @@ const ITEM_TEMPLATES = {
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
-      tier: 'common', unbreakable: false, 'item-flags': ['*'], color: '-1,-1,-1',
+      tier: 'common', unbreakable: false, 'fire-resistant': false, 'item-flags': ['*'], color: '-1,-1,-1',
       level: { min: 1, max: 50 },
       generator: {
         'prefix-chance': 80.0, 'suffix-chance': 0.0,
@@ -634,7 +642,7 @@ const ITEM_TEMPLATES = {
         '%GENERATOR_STATS%', '%GENERATOR_FABLED_ATTR%',
         '%GENERATOR_SOCKETS_GEM%', '%GENERATOR_SOCKETS_ESSENCE%', '%GENERATOR_SOCKETS_RUNE%',
       ],
-      tier: 'common', unbreakable: false, 'item-flags': ['*'], color: '-1,-1,-1',
+      tier: 'common', unbreakable: false, 'fire-resistant': false, 'item-flags': ['*'], color: '-1,-1,-1',
       level: { min: 1, max: 50 },
       generator: {
         'prefix-chance': 80.0, 'suffix-chance': 0.0,
@@ -1084,6 +1092,7 @@ const ITEM_TEMPLATES = {
       material:     'IRON_INGOT',
       color:        '-1,-1,-1',
       unbreakable:  false,
+      'fire-resistant': false,
       'item-flags': [],
       enchantments: {},
       'model-data': -1,
@@ -1421,6 +1430,20 @@ function renderGeneralStats(data, sid) {
     const enId    = safeId(sid, id, 'en');
     const isNew   = (SYNCED_NEW[sid] || new Set()).has(id);
     const cat     = _categoryForStat(id);
+    // BLEED_RATE is the only stat with extra plugin-side settings (BleedStat).
+    const bleedRow = String(id).toUpperCase() === 'BLEED_RATE' ? `
+      <tr class="data-row${enabled ? '' : ' row-disabled'}" data-cat="${esc(cat.name)}">
+        <td colspan="6" style="padding:4px 8px 8px 24px;background:#16161c">
+          <span class="muted small" style="margin-right:8px">🩸 ${T('Bleed settings')}:</span>
+          <span class="muted small">${T('Damage formula')}</span>
+          ${editText(sid, `${id}.settings.damage`, stat.settings?.damage ?? '%damage% * 0.5', 'edit-input--format')}
+          <span class="muted small" style="margin-left:10px">${T('Of max health')}</span>
+          <input class="edit-check" type="checkbox" ${stat.settings?.['of-max-health'] ? 'checked' : ''}
+            onchange="APP.updateField('${sid}','${escJs(`${id}.settings.of-max-health`)}',this.checked)">
+          <span class="muted small" style="margin-left:10px">${T('Duration (s)')}</span>
+          ${editNum(sid, `${id}.settings.duration`, stat.settings?.duration ?? 10)}
+        </td>
+      </tr>` : '';
     return `
       <tr class="data-row${enabled ? '' : ' row-disabled'}${isNew ? ' entry-new' : ''}" data-cat="${esc(cat.name)}">
         <td>${editId(sid, id)} ${isNew ? '<span class="badge badge-blue">new</span>' : ''}</td>
@@ -1437,7 +1460,7 @@ function renderGeneralStats(data, sid) {
           ${liveBadge(enabled, enId, 'enabled')}
         </td>
         <td>${removeEntryBtn(sid, id)}</td>
-      </tr>`;
+      </tr>${bleedRow}`;
   };
 
   const groupsHtml = orderedCats.map(c => {
@@ -1472,7 +1495,7 @@ function renderDamage(data, sid) {
   const TPL = {
     name: 'New Type', format: '&2▸ %name%: &f%value%', priority: 1,
     'attached-damage-causes': [],
-    'biome-damage-modifiers': {},
+    'biome-damage-modifier': {},
     'on-hit-actions': {},
     'entity-type-modifier': {},
     'mythic-mob-faction-modifier': {},
@@ -1494,7 +1517,8 @@ function renderDamage(data, sid) {
             ${cardRow(T('Priority'), editNum(sid,  `${id}.priority`, dt.priority ?? 1, 'edit-input--inline'))}
             ${cardRowFormat(sid, id, dt.format ?? '', dt.name ?? id)}
             ${cardRow(T('Attached causes'),      lineArrayField(sid, `${id}.attached-damage-causes`,      dt['attached-damage-causes']      ?? []))}
-            ${cardRow(T('Biome modifiers'),   lineKvFieldNum(sid, `${id}.biome-damage-modifiers`,      dt['biome-damage-modifiers']      ?? {}, 'BIOME multiplier'))}
+            ${cardRow(T('Biome modifiers'),   lineKvFieldNum(sid, `${id}.biome-damage-modifier`,       dt['biome-damage-modifier']       ?? dt['biome-damage-modifiers'] ?? {}, 'BIOME multiplier'))}
+            ${dt['biome-damage-modifiers'] && !dt['biome-damage-modifier'] ? `<p class="muted small" style="margin-top:-6px;margin-bottom:4px;color:#e74">⚠️ ${T('Legacy key')} <code>biome-damage-modifiers</code> ${T('detected — plugin reads')} <code>biome-damage-modifier</code>. ${T('Edit the field above to migrate.')}</p>` : ''}
             <p class="muted small" style="margin-top:-6px;margin-bottom:4px">${T('e.g.')} <code>PLAINS 1.0</code> — ${T('Bukkit Biome name.')}</p>
             ${cardRow(T('On-hit actions'),    jsonTextarea(sid, `${id}.on-hit-actions`, dt['on-hit-actions'] ?? {}))}
             ${cardRow(T('Entity modifiers'),  lineKvFieldNum(sid, `${id}.entity-type-modifier`,        dt['entity-type-modifier']        ?? {}, 'ENTITY_TYPE multiplier'))}
@@ -1943,19 +1967,92 @@ function igBonusTypeMap(sid, fname, path, current, loadedSection, label, icon) {
 }
 
 /**
+ * Bonus rows editor: type dropdown + number + flat/% segmented toggle + remove.
+ * Used for arrow additional-stats / additional-damage / defense-ignoring, where a
+ * trailing % is semantic (relative bonus) vs no % (flat). Keeps that flag explicit
+ * instead of a freeform textarea. `loadedSection` supplies the add-dropdown keys.
+ */
+function igBonusRows(sid, fname, path, current, loadedSection, label, icon) {
+  const cur    = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
+  const loaded = STATE.loaded?.[loadedSection];
+  const available = (loaded && typeof loaded === 'object' && !loaded._multiFile)
+    ? Object.keys(loaded).filter(k => !k.startsWith('_')) : [];
+
+  const parse = (v) => {
+    const s = String(v ?? '').trim();
+    const percent = s.endsWith('%');
+    const n = parseFloat(percent ? s.slice(0, -1) : s);
+    return { num: isFinite(n) ? n : 0, percent };
+  };
+
+  const seg = (id, active, txt, pct) => `<button type="button"
+    style="padding:1px 7px;font-size:10px;line-height:1.5;cursor:pointer;border:1px solid #444;
+      background:${active ? '#2b4a2b' : '#1c1c1c'};color:${active ? '#9fe09f' : '#888'};
+      ${pct ? 'border-radius:0 3px 3px 0;border-left:none' : 'border-radius:3px 0 0 3px'}"
+    onclick="APP.igBonusSetPercent('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}',${pct})">${txt}</button>`;
+
+  const rows = Object.entries(cur).map(([id, val]) => {
+    const { num, percent } = parse(val);
+    return `
+    <div style="display:flex;gap:5px;align-items:center;margin-bottom:3px">
+      <span style="min-width:120px;font-size:11px;color:#ccc">${esc(id)}</span>
+      <input class="edit-input edit-input--num" style="width:62px;font-size:11px" type="number" step="0.01"
+        value="${esc(num)}"
+        oninput="APP.igBonusSetNum('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}',this.value)">
+      <span style="display:inline-flex" title="${T('flat = absolute, % = relative bonus')}">
+        ${seg(id, !percent, T('flat'), false)}${seg(id, percent, '%', true)}
+      </span>
+      <button style="padding:1px 5px;background:#3a1e1e;border:1px solid #8a3a3a;border-radius:3px;color:#ea8f8f;cursor:pointer;font-size:10px;line-height:1.2"
+        onclick="APP.igBonusRemoveKey('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}')">✕</button>
+    </div>`;
+  }).join('');
+
+  const toAdd = available.filter(k => !Object.prototype.hasOwnProperty.call(cur, k));
+  const addEl = available.length
+    ? `<select class="edit-input" style="font-size:10px;padding:1px 4px;margin-top:3px"
+        onchange="if(this.value){APP.igBonusAddKey('${sid}','${escJs(fname)}','${escJs(path)}',this.value,0);this.value=''}">
+        <option value="">+ ${T('Add')} ${esc(T(label))}…</option>
+        ${toAdd.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+      </select>`
+    : `<input class="edit-input" style="font-size:11px;width:140px;margin-top:3px" placeholder="+ ${T('id, press Enter')}"
+        onkeydown="if(event.key==='Enter'&&this.value.trim()){APP.igBonusAddKey('${sid}','${escJs(fname)}','${escJs(path)}',this.value.trim(),0);this.value=''}">`;
+
+  return `<div style="margin-bottom:8px">
+    <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">${icon} ${T(label)}</div>
+    <div style="padding-left:6px">
+      ${rows || `<p class="muted small" style="margin:0 0 2px">${T('None set.')}</p>`}
+      ${addEl}
+    </div>
+  </div>`;
+}
+
+/**
  * Renders item-stats inside a bonus entry, split into the same 4 categories
  * as the main STATS editor: General Stats, Damage Buffs %, Defense Buffs %, Penetration.
  * Each category reads keys from the corresponding loaded section for its add-dropdown.
+ *
+ * catSecs selects which categories show, in order. Default = the 4 that mirror the main
+ * STATS editor (general / dmgbuff / defbuff / penetration) — used by the itemgen generator
+ * where all of them live under the single item-stats path.
+ *
+ * For gems/sets pass ['general','customstats']: there the plugin's BonusMap.loadStats reads
+ * item-stats as ONLY TypedStat + custom stats, while damage-buffs / defense-buffs /
+ * penetrations are loaded from their own YAML siblings (see GemManager). Those siblings get
+ * their own dropdown editors (igBonusRows) in the host card, so routing buff/pen keys through
+ * item-stats here would be a dead duplicate. Stray buff/pen keys already sitting in item-stats
+ * still surface under the "Other" bucket for cleanup.
  */
-function igBonusItemStats(sid, fname, path, current) {
+function igBonusItemStats(sid, fname, path, current, catSecs = ['general', 'dmgbuff', 'defbuff', 'penetration']) {
   const cur = (current && typeof current === 'object') ? current : {};
 
-  const cats = [
-    { label: 'General Stats',   sec: 'general',     color: '#6db', icon: '📊' },
-    { label: 'Damage Buffs %',  sec: 'dmgbuff',    color: '#e74', icon: '🔥' },
-    { label: 'Defense Buffs %', sec: 'defbuff',    color: '#48f', icon: '🛡' },
-    { label: 'Penetration',     sec: 'penetration', color: '#fa4', icon: '🎯' },
-  ];
+  const CAT_META = {
+    general:     { label: 'General Stats',   color: '#6db',    icon: '📊' },
+    customstats: { label: 'Custom Stats',    color: '#b48ead', icon: '🧩' },
+    dmgbuff:     { label: 'Damage Buffs %',  color: '#e74',    icon: '🔥' },
+    defbuff:     { label: 'Defense Buffs %', color: '#48f',    icon: '🛡' },
+    penetration: { label: 'Penetration',     color: '#fa4',    icon: '🎯' },
+  };
+  const cats = catSecs.map(sec => ({ sec, ...(CAT_META[sec] ?? { label: sec, color: '#999', icon: '📦' }) }));
 
   const assignedKeys = new Set();
 
@@ -2022,6 +2119,132 @@ function igBonusItemStats(sid, fname, path, current) {
     <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">📊 ${T('Item Stats')}</div>
     <div style="padding:4px 0 0 8px;border-left:2px solid #2a3a2a">
       ${catHtml}${unknownHtml}
+    </div>
+  </div>`;
+}
+
+/**
+ * One collapsible bonus-stat category, styled exactly like the General/Custom Stats
+ * categories: coloured title + count badge, a key dropdown sourced from `sec`'s loaded
+ * section (falls back to free-text when the section isn't loaded), and value rows.
+ *
+ * percent=true adds the flat/% segmented toggle and stores the trailing % (damage/defense
+ * types, buffs, penetration). percent=false renders plain number rows (general/custom).
+ *
+ * shared=true → the YAML path is shared with sibling categories (item-stats): only entries
+ * whose key belongs to this section are shown here. shared=false → dedicated path, all
+ * entries shown.
+ */
+function igBonusStatCat(sid, fname, { path, current, sec, label, color, icon, percent = false, shared = false, excludeKeys = null }) {
+  const cur = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
+  const loaded = STATE.loaded?.[sec];
+  const secKeys = (loaded && typeof loaded === 'object' && !loaded._multiFile)
+    ? Object.keys(loaded).filter(k => !k.startsWith('_')) : [];
+
+  // Dedicated path → show all entries. Shared path (item-stats) → either this category is
+  // the catch-all (excludeKeys given: show everything NOT claimed by a sibling) or it claims
+  // only its own section's keys. The catch-all keeps item-stats keys visible even when the
+  // stat section isn't loaded, so nothing gets stranded in a non-removable bucket.
+  const curEntries = !shared
+    ? Object.entries(cur)
+    : excludeKeys
+      ? Object.entries(cur).filter(([k]) => !excludeKeys.has(k))
+      : Object.entries(cur).filter(([k]) => secKeys.includes(k));
+
+  const parse = (v) => {
+    const s = String(v ?? '').trim();
+    const pc = s.endsWith('%');
+    const n = parseFloat(pc ? s.slice(0, -1) : s);
+    return { num: isFinite(n) ? n : 0, percent: pc };
+  };
+
+  const seg = (id, active, txt, pct) => `<button type="button"
+    style="padding:1px 7px;font-size:10px;line-height:1.5;cursor:pointer;border:1px solid #444;
+      background:${active ? '#2b4a2b' : '#1c1c1c'};color:${active ? '#9fe09f' : '#888'};
+      ${pct ? 'border-radius:0 3px 3px 0;border-left:none' : 'border-radius:3px 0 0 3px'}"
+    onclick="APP.igBonusSetPercent('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}',${pct})">${txt}</button>`;
+
+  const rows = curEntries.map(([id, val]) => {
+    const { num, percent: isPct } = parse(val);
+    const valInput = percent
+      ? `<input class="edit-input edit-input--num" style="width:62px;font-size:11px" type="number" step="0.01"
+           value="${esc(num)}"
+           oninput="APP.igBonusSetNum('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}',this.value)">
+         <span style="display:inline-flex" title="${T('flat = absolute, % = relative bonus')}">
+           ${seg(id, !isPct, T('flat'), false)}${seg(id, isPct, '%', true)}
+         </span>`
+      : `<input class="edit-input edit-input--num" style="width:65px;font-size:11px" type="number" step="0.01"
+           value="${esc(val)}"
+           oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(path + '.' + id)}',+this.value)">`;
+    return `<div style="display:flex;gap:5px;align-items:center;margin-bottom:2px">
+        <span style="min-width:130px;font-size:11px;color:#ccc">${esc(id)}</span>
+        ${valInput}
+        <button style="padding:1px 4px;background:#3a1e1e;border:1px solid #8a3a3a;border-radius:3px;color:#ea8f8f;cursor:pointer;font-size:10px;line-height:1.2"
+          onclick="APP.igBonusRemoveKey('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(id)}')">✕</button>
+      </div>`;
+  }).join('');
+
+  const addDefault = percent ? 0 : 1;
+  const toAdd = secKeys.filter(k => !Object.prototype.hasOwnProperty.call(cur, k));
+  const addEl = secKeys.length
+    ? `<select class="edit-input" style="font-size:10px;padding:1px 4px;margin-top:2px"
+        onchange="if(this.value){APP.igBonusAddKey('${sid}','${escJs(fname)}','${escJs(path)}',this.value,${addDefault});this.value=''}">
+        <option value="">+ ${T('Add')} ${esc(T(label))}…</option>
+        ${toAdd.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+      </select>`
+    : `<input class="edit-input" style="font-size:11px;width:140px;margin-top:3px" placeholder="+ ${T('id, press Enter')}"
+        onkeydown="if(event.key==='Enter'&&this.value.trim()){APP.igBonusAddKey('${sid}','${escJs(fname)}','${escJs(path)}',this.value.trim(),${addDefault});this.value=''}">`;
+
+  const badge = curEntries.length ? ` <span style="background:#2a2a2a;border-radius:9px;padding:0 5px;font-size:10px;color:#aaa">${curEntries.length}</span>` : '';
+  return igCollapsible(
+    `<span style="color:${color}">${icon} ${T(label)}</span>${badge}`,
+    `<div style="padding-left:6px">
+      ${rows || `<p class="muted small" style="margin:0 0 1px">${T('None.')}</p>`}
+      ${addEl}
+    </div>`,
+    curEntries.length > 0,
+    `${fname}:${path}:${sec}`
+  );
+}
+
+/**
+ * Full bonus-stats editor for gems/sets: every category rendered uniformly as a collapsible
+ * with a key dropdown (General / Custom / Damage Types / Defense Types / Damage Buffs /
+ * Defense Buffs / Penetration). general+custom share the item-stats path (plugin loadStats);
+ * the rest write to their own YAML siblings (loadDamages/loadDefenses/loadDamageBuffs/
+ * loadDefenseBuffs/loadPenetrations).
+ *
+ * item-stats holds only General + Custom stats (plugin loadStats resolves nothing else there),
+ * so there is no real "Other": Custom claims keys from the loaded custom-stats section and
+ * General shows every remaining item-stats key. That keeps keys visible/editable even when the
+ * stat sections aren't loaded — no stranded bucket. `bp` = bonus base path, e.g. bonuses-by-level.1
+ */
+function igBonusStats(sid, fname, bp, bonus) {
+  const itemStats = bonus['item-stats'] ?? {};
+  const ip = `${bp}.item-stats`;
+
+  // Keys claimed by the Custom Stats category (only when that section is loaded); everything
+  // else under item-stats falls to the General catch-all.
+  const customLoaded = STATE.loaded?.customstats;
+  const customKeys = new Set(
+    (customLoaded && typeof customLoaded === 'object' && !customLoaded._multiFile)
+      ? Object.keys(customLoaded).filter(k => !k.startsWith('_')) : []
+  );
+
+  const cats = [
+    igBonusStatCat(sid, fname, { path: ip,                  current: itemStats,                    sec: 'general',     label: 'General Stats',   color: '#6db',    icon: '📊', shared: true, excludeKeys: customKeys }),
+    igBonusStatCat(sid, fname, { path: ip,                  current: itemStats,                    sec: 'customstats', label: 'Custom Stats',    color: '#b48ead', icon: '🧩', shared: true }),
+    igBonusStatCat(sid, fname, { path: `${bp}.damage-types`,  current: bonus['damage-types']  ?? {}, sec: 'damage',      label: 'Damage Types',    color: '#e57373', icon: '⚔️', percent: true }),
+    igBonusStatCat(sid, fname, { path: `${bp}.defense-types`, current: bonus['defense-types'] ?? {}, sec: 'defense',     label: 'Defense Types',   color: '#64b5f6', icon: '🛡️', percent: true }),
+    igBonusStatCat(sid, fname, { path: `${bp}.damage-buffs`,  current: bonus['damage-buffs']  ?? {}, sec: 'dmgbuff',     label: 'Damage Buffs %',  color: '#e74',    icon: '🔥', percent: true }),
+    igBonusStatCat(sid, fname, { path: `${bp}.defense-buffs`, current: bonus['defense-buffs'] ?? {}, sec: 'defbuff',     label: 'Defense Buffs %', color: '#48f',    icon: '🛡', percent: true }),
+    igBonusStatCat(sid, fname, { path: `${bp}.penetrations`,  current: bonus['penetrations']  ?? {}, sec: 'penetration', label: 'Penetration',     color: '#fa4',    icon: '🎯', percent: true }),
+  ].join('');
+
+  return `<div style="margin-bottom:8px">
+    <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">📊 ${T('Bonus Stats')}</div>
+    <div style="padding:4px 0 0 8px;border-left:2px solid #2a3a2a">
+      ${cats}
     </div>
   </div>`;
 }
@@ -2126,6 +2349,76 @@ window.updateLorePreview = function(textarea, pid) {
       : '<div class="lore-line">' + mc.toHtml(mc.resolve(String(l), {})) + '</div>';
   }).join('');
 };
+
+/** Live single-line MC-color preview for text inputs (name, socket-display, formats). */
+window.updateLinePreview = function(input, pid) {
+  const el = document.getElementById(pid);
+  if (!el) return;
+  el.innerHTML = mc.toHtml(mc.resolve(String(input.value), {}));
+};
+
+/** Toggle a warning badge live: hide when value is in the known-ids list. */
+window.updateKnownIdWarn = function(input, warnId, idsJson, allowEmpty) {
+  const w = document.getElementById(warnId);
+  if (!w) return;
+  let ids = null;
+  try { ids = JSON.parse(idsJson); } catch (_) {}
+  if (!Array.isArray(ids)) { w.style.display = 'none'; return; }
+  const v  = String(input.value).trim().toLowerCase();
+  const ok = (allowEmpty && v === '') || ids.includes(v);
+  w.style.display = ok ? 'none' : '';
+};
+
+/** Formatted text field + live single-line preview underneath (no re-render needed). */
+function igFieldPrev(sid, fname, path, val) {
+  const pid = `fprev-${(sid + fname + path).replace(/[^a-z0-9]/gi, '_').slice(0, 60)}`;
+  return `<input class="edit-input edit-input--format" type="text" value="${esc(val ?? '')}"
+    oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(path)}',this.value);updateLinePreview(this,'${pid}')">
+  <div id="${pid}" class="lore-preview" style="margin-bottom:4px">${mc.toHtml(mc.resolve(String(val ?? ''), {}))}</div>`;
+}
+
+/**
+ * Generic id field validated against a known-ids list:
+ * datalist suggestions + live ⚠ badge when the value is not in the list.
+ * When the source section is not loaded → plain input + hint (no false warnings).
+ */
+function igKnownIdField(sid, fname, path, val, ids, allowEmpty, warnTitle, hint) {
+  const uid = `kid-${(sid + fname + path).replace(/[^a-z0-9]/gi, '_').slice(0, 60)}`;
+  const v   = String(val ?? '');
+  if (!ids) {
+    return `${igField(sid, fname, path, v)}
+      <p class="muted small" style="margin-top:2px">${hint}</p>`;
+  }
+  const lower  = ids.map(t => String(t).toLowerCase());
+  const bad    = !((allowEmpty && v.trim() === '') || lower.includes(v.trim().toLowerCase()));
+  const idsJs  = esc(JSON.stringify(lower));
+  return `<div style="display:flex;gap:6px;align-items:center">
+    <input class="edit-input" type="text" list="${uid}-dl" value="${esc(v)}"
+      oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(path)}',this.value);updateKnownIdWarn(this,'${uid}-warn','${idsJs}',${allowEmpty ? 'true' : 'false'})">
+    <span id="${uid}-warn" class="badge badge-red" style="font-size:9px;white-space:nowrap;${bad ? '' : 'display:none'}" title="${warnTitle}">⚠</span>
+    <datalist id="${uid}-dl">${ids.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+  </div>`;
+}
+
+/** Tier id field — validated against config.yml tiers (Tiers & Groups section). */
+function igTierField(sid, fname, path, val, allowEmpty = false) {
+  const tiers = STATE.loaded?.mainconfig?.tiers;
+  const ids   = tiers && typeof tiers === 'object' ? Object.keys(tiers) : null;
+  return igKnownIdField(sid, fname, path, val, ids, allowEmpty,
+    T('Tier id not found in config.yml tiers — item will fail to load'),
+    T('Load config.yml in Tiers & Groups for suggestions and validation.'));
+}
+
+/** Socket category field — validated against item_stats/sockets.yml categories for this module type. */
+const SOCKET_TYPE_BY_SID = { gems: 'GEM', runes: 'RUNE', essences: 'ESSENCE' };
+function igSocketCatField(sid, fname, path, val) {
+  const type = SOCKET_TYPE_BY_SID[sid];
+  const cats = type ? STATE.loaded?.sockets?.[type]?.categories : null;
+  const ids  = cats && typeof cats === 'object' ? Object.keys(cats) : null;
+  return igKnownIdField(sid, fname, path, val, ids, false,
+    T('Category not found in sockets.yml for this socket type — item will not fit any slot'),
+    T('Load item_stats/sockets.yml in Socket Categories for suggestions and validation.'));
+}
 
 window.updateSetLorePreview = function(textarea, pid) {
   const el = document.getElementById(pid);
@@ -2288,11 +2581,17 @@ function buildStatPool(sid, fname, basePath, listData) {
   if (!entries.length) return `<p class="muted small">${T('No entries.')}</p>`;
 
   const rows = entries.map(([id, e]) => {
-    const p      = `${basePath}.${id}`;
-    const active = (e.chance ?? 0) > 0;
-    const rowId  = `spr-${(sid + fname + basePath + id).replace(/[^a-z0-9]/gi, '_')}`;
-    return `<tr id="${rowId}" class="${active ? '' : 'row-disabled'}">
-      <td><code>${esc(id)}</code></td>
+    const p       = `${basePath}.${id}`;
+    const active  = (e.chance ?? 0) > 0;
+    const rowId   = `spr-${(sid + fname + basePath + id).replace(/[^a-z0-9]/gi, '_')}`;
+    // chance < 0: never rolled directly, but injected at 100% as a dependent stat
+    // (e.g. max_health when its parent stat rolls) — mark distinctly, not as plain off.
+    const depend  = (e.chance ?? 0) < 0;
+    const rowAttr = depend
+      ? ` title="${T('chance -1 — rolled only as a dependent stat (forced 100% when its parent stat rolls)')}"`
+      : '';
+    return `<tr id="${rowId}" class="${active ? '' : 'row-disabled'}"${rowAttr}>
+      <td><code>${esc(id)}</code>${depend ? ' <span class="badge badge-yellow" style="font-size:9px">dep</span>' : ''}</td>
       <td><input class="edit-input edit-input--num" type="number" step="1" value="${esc(e.chance ?? 0)}"
         oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(p + '.chance')}',+this.value);(function(v){var r=document.getElementById('${rowId}');if(r)r.classList.toggle('row-disabled',+v<=0)})(this.value)">
       </td>
@@ -2422,8 +2721,11 @@ function buildItemStatsGroup(sid, fname, basePath, groupData) {
 
 /** Collapsible sockets section (GEM / ESSENCE / RUNE). */
 /**
- * Simplified pool table for sockets — only chance matters,
- * no scale-by-level / min / max / flat / round.
+ * Pool table for sockets. `chance` = legacy random-pool roll (uses type-level
+ * minimum/maximum). `amount-min`/`amount-max` = guaranteed sockets of this
+ * category, added BEFORE the random pool (AttributeGenerator.java:172). Equal
+ * values pin an exact count (2/2 = always 2); min<max = random in range; 0/0 =
+ * chance-roll only. For "exactly N and nothing else" also set type min/max to 0.
  */
 function buildSocketPool(sid, fname, basePath, listData) {
   if (!listData || typeof listData !== 'object') return `<p class="muted small">${T('No entries. Use ↺ Sync to populate.')}</p>`;
@@ -2431,19 +2733,32 @@ function buildSocketPool(sid, fname, basePath, listData) {
   if (!entries.length) return `<p class="muted small">${T('No entries. Use ↺ Sync to populate.')}</p>`;
 
   const rows = entries.map(([id, e]) => {
-    const p      = `${basePath}.${id}`;
-    const active = (e.chance ?? 0) > 0;
-    const rowId  = `spr-${(sid + fname + basePath + id).replace(/[^a-z0-9]/gi, '_')}`;
-    return `<tr id="${rowId}" class="${active ? '' : 'row-disabled'}">
-      <td><code>${esc(id)}</code></td>
+    const p       = `${basePath}.${id}`;
+    const active  = (e.chance ?? 0) > 0;
+    const rowId   = `spr-${(sid + fname + basePath + id).replace(/[^a-z0-9]/gi, '_')}`;
+    // chance < 0: never rolled directly, but injected at 100% as a dependent stat
+    // (e.g. max_health when its parent stat rolls) — mark distinctly, not as plain off.
+    const depend  = (e.chance ?? 0) < 0;
+    const rowAttr = depend
+      ? ` title="${T('chance -1 — rolled only as a dependent stat (forced 100% when its parent stat rolls)')}"`
+      : '';
+    const guar = (e['amount-min'] ?? 0) > 0 || (e['amount-max'] ?? 0) > 0;
+    return `<tr id="${rowId}" class="${active || guar ? '' : 'row-disabled'}"${rowAttr}>
+      <td><code>${esc(id)}</code>${depend ? ' <span class="badge badge-yellow" style="font-size:9px">dep</span>' : ''}${guar ? ' <span class="badge badge-blue" style="font-size:9px">guar</span>' : ''}</td>
       <td><input class="edit-input edit-input--num" type="number" step="1" value="${esc(e.chance ?? 0)}"
         oninput="APP.igUpdateField('${sid}','${escJs(fname)}','${escJs(p + '.chance')}',+this.value);(function(v){var r=document.getElementById('${rowId}');if(r)r.classList.toggle('row-disabled',+v<=0)})(this.value)">
       </td>
+      <td>${igNum(sid, fname, `${p}.amount-min`, e['amount-min'] ?? 0)}</td>
+      <td>${igNum(sid, fname, `${p}.amount-max`, e['amount-max'] ?? 0)}</td>
     </tr>`;
   }).join('');
 
   return `<table class="tbl tbl-compact">
-    <thead><tr><th>${T('Socket category')}</th><th>${T('Chance %')}</th></tr></thead>
+    <thead><tr>
+      <th>${T('Socket category')}</th><th>${T('Chance %')}</th>
+      <th title="${T('Guaranteed sockets of this category, added before the random pool. Equal min=max pins an exact count.')}">${T('Guar. min')}</th>
+      <th title="${T('Guaranteed sockets of this category, added before the random pool. Equal min=max pins an exact count.')}">${T('Guar. max')}</th>
+    </tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -2630,11 +2945,11 @@ function renderItemGenFile(sid, fname, data, family) {
     ${header}
     <div class="ig-card__body">
 
-      ${igCollapsible(`👁 ${T('Lore')}`, igLoreFormat(sid, fname, 'lore', lore), true, `${fname}:lore`)}
+      ${igCollapsible(`👁 ${T('Lore')} <button title="${T('Rebuild main lore to canonical layout (all GENERATOR_* tokens in standard order). Overwrites current lines.')}" style="padding:1px 7px;font-size:11px;cursor:pointer;background:#1e2e3e;border:1px solid #4a7aaa;border-radius:3px;color:#8fb8ea;vertical-align:middle" onclick="event.stopPropagation();APP.igSyncMainLore('${sid}','${escJs(fname)}')">↺ ${T('Sync lore')}</button>`, igLoreFormat(sid, fname, 'lore', lore), true, `${fname}:lore`)}
 
       ${igCollapsible(`📋 ${T('Basic Info')}`, `
         ${cardRow(T('Name template'),   igField(sid, fname, 'name', data.name ?? '', 'edit-input--format'))}
-        ${cardRow(T('Tier'),            igField(sid, fname, 'tier', tier, 'edit-input--inline'))}
+        ${cardRow(T('Tier'),            igTierField(sid, fname, 'tier', tier))}
         ${cardRow(T('Level min / max'),
           `<div style="display:flex;gap:6px;align-items:center">
             ${igNum(sid, fname, 'level.min', minLvl)}
@@ -2643,6 +2958,7 @@ function renderItemGenFile(sid, fname, data, family) {
           </div>`)}
         ${cardRow(T('Color (R,G,B)'), igColorField(sid, fname, 'color', String(data.color ?? '-1,-1,-1')))}
         ${cardRow(T('Unbreakable'), igCheck(sid, fname, 'unbreakable', data.unbreakable === true))}
+        ${cardRow(T('Fire Resistant'), igCheck(sid, fname, 'fire-resistant', data['fire-resistant'] === true))}
         ${cardRow(T('Enchanted'),   igCheck(sid, fname, 'enchanted',   data.enchanted  === true))}
         ${cardRow(T('Durability %'), igNum(sid, fname, 'durability',  data.durability  ?? 100))}
         ${cardRow(T('Custom Model Data'), igNum(sid, fname, 'model-data',  data['model-data'] ?? 0))}
@@ -2736,8 +3052,8 @@ function renderItemGenFile(sid, fname, data, family) {
       `, false, `${fname}:shields`)}
 
       ${igCollapsible(`🪨 ${T('Armor Trimmings (1.20+)')}`,
-        `${igLineKvField(sid, fname, 'generator.armor-trimmings', gen['armor-trimmings'] ?? {}, 'trim-pattern-id weight')}
-         <p class="muted small" style="margin-top:4px">${T('One trim per line — e.g.')} <code>sentry 1.0</code>. ${T('Requires MC 1.20+.')}</p>`,
+        `${igLineKvField(sid, fname, 'generator.armor-trimmings', gen['armor-trimmings'] ?? {}, 'material:pattern weight')}
+         <p class="muted small" style="margin-top:4px">${T('One entry per line, key =')} <code>trim-material:trim-pattern</code> — ${T('e.g.')} <code>iron:sentry 1.0</code>, <code>*:rib 0.5</code> (${T('any material')}), <code>none 10.0</code> (${T('no trim')}). ${T('Requires MC 1.20+.')}</p>`,
         false, `${fname}:trim`)}
 
 
@@ -2793,6 +3109,7 @@ function renderItemGenerator(data, sid) {
         <button class="btn-add-entry" onclick="APP.igAddGroup('${sid}')">📁 ${T('New folder')}</button>
         <button class="btn-add-entry" onclick="APP.igCollapseAll('${sid}')">▶ ${T('Collapse all')}</button>
         <button class="btn-add-entry" onclick="APP.igExpandAll('${sid}')">▼ ${T('Expand all')}</button>
+        <button class="btn-add-entry" onclick="APP.igSyncAllFiles('${sid}')" title="${T('Run Sync All on every loaded file (lore-format + stat pools + socket lore)')}">↺ ${T('Sync all files')}</button>
         <button class="btn-download" onclick="APP.igDownloadAll('${sid}')" title="${T('Download all as folder tree (Chrome/Edge) or ZIP')}">⬇ ${T('Download all')}</button>
       </div>`;
 
@@ -2915,16 +3232,27 @@ function igGemSkillsList(sid, fname, path, skills) {
  * Toggle-button group for target-requirements.type array.
  * Available types: WEAPON, ARMOR, *.
  */
-const TARGET_ITEM_TYPES = ['WEAPON', 'ARMOR', '*'];
+// ItemGroup enum (WEAPON/ARMOR/TOOL) + '*' wildcard. Plugin also accepts
+// item-sub-type ids from config.yml (sword, boots, …) and custom item ids —
+// those show up as extra toggles below and can be added via the text input.
+const TARGET_ITEM_TYPES = ['WEAPON', 'ARMOR', 'TOOL', '*'];
 function igTypeButtons(sid, fname, path, currentArr) {
-  const active = new Set(Array.isArray(currentArr) ? currentArr : []);
-  return `<div style="display:flex;flex-wrap:wrap;gap:4px">
-    ${TARGET_ITEM_TYPES.map(t => {
-      const on = active.has(t);
-      return `<button
-        style="padding:2px 8px;font-size:11px;cursor:pointer;border-radius:3px;border:1px solid ${on?'#4a8a4a':'#555'};background:${on?'#1e3a1e':'#2a2a2a'};color:${on?'#8fea8f':'#aaa'}"
-        onclick="APP.igToggleArrayValue('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(t)}')">${esc(t)}</button>`;
-    }).join('')}
+  const arr    = Array.isArray(currentArr) ? currentArr : [];
+  const active = new Set(arr);
+  const std    = new Set(TARGET_ITEM_TYPES.map(t => t.toLowerCase()));
+  const extras = arr.filter(t => !std.has(String(t).toLowerCase()));
+  const inId   = `tt-${(sid + fname + path).replace(/[^a-z0-9]/gi, '_')}`;
+
+  const btn = (t, on) => `<button
+    style="padding:2px 8px;font-size:11px;cursor:pointer;border-radius:3px;border:1px solid ${on?'#4a8a4a':'#555'};background:${on?'#1e3a1e':'#2a2a2a'};color:${on?'#8fea8f':'#aaa'}"
+    onclick="APP.igToggleArrayValue('${sid}','${escJs(fname)}','${escJs(path)}','${escJs(t)}')">${esc(t)}</button>`;
+
+  return `<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+    ${TARGET_ITEM_TYPES.map(t => btn(t, active.has(t) || active.has(t.toLowerCase()))).join('')}
+    ${extras.map(t => btn(t, true)).join('')}
+    <input id="${inId}" class="edit-input" type="text" placeholder="${T('sub-type id…')}" style="width:90px;font-size:11px">
+    <button class="btn-add-entry" style="font-size:11px"
+      onclick="var v=document.getElementById('${inId}').value.trim();if(v){APP.igToggleArrayValue('${sid}','${escJs(fname)}','${escJs(path)}',v)}">+</button>
   </div>`;
 }
 
@@ -2981,20 +3309,7 @@ function renderSetCard(sid, fname, setData) {
         tierTitle,
         `${overflowWarn}
          ${igCollapsible(`📜 ${T('Lore')}`, igSetLoreFormat(sid, fname, `${bp}.lore`, lore, colorActive), lore.length > 0, `${fname}:tier-${cnt}:lore`)}
-         ${igBonusItemStats(sid, fname, `${bp}.item-stats`, bonus['item-stats'] ?? {})}
-         ${igBonusTypeMap(sid, fname, `${bp}.damage-types`,  bonus['damage-types']  ?? {}, 'damage',  'Damage Types',  '⚔️')}
-         ${igBonusTypeMap(sid, fname, `${bp}.defense-types`, bonus['defense-types'] ?? {}, 'defense', 'Defense Types', '🛡️')}
-         <div style="margin-bottom:8px">
-           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🔥 ${T('Damage Buffs %')}</div>
-           ${igLineKvField(sid, fname, `${bp}.damage-buffs`, bonus['damage-buffs'] ?? {}, 'type value%')}
-           <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>physical 5%</code></p>
-         </div>
-         <div style="margin-bottom:8px">
-           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🛡 ${T('Defense Buffs %')}</div>
-           ${igLineKvField(sid, fname, `${bp}.defense-buffs`, bonus['defense-buffs'] ?? {}, 'type value%')}
-           <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>physical 3%</code></p>
-         </div>
-         ${igBonusTypeMap(sid, fname, `${bp}.penetrations`, bonus['penetrations'] ?? {}, 'penetration', 'Penetrations', '🎯')}
+         ${igBonusStats(sid, fname, bp, bonus)}
          ${igCollapsible(`🧪 ${T('Potion Effects')}`, igPotionEffects(sid, fname, `${bp}.potion-effects`, bonus['potion-effects'] ?? {}), Object.keys(bonus['potion-effects'] ?? {}).length > 0, `${fname}:tier-${cnt}:potions`)}
          <button class="btn-icon btn-del" style="margin-top:6px"
            onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses.by-elements-amount','${escJs(String(cnt))}')">🗑 ${T('Remove tier')}</button>`,
@@ -3013,7 +3328,7 @@ function renderSetCard(sid, fname, setData) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">👑</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3092,7 +3407,7 @@ function renderSets(data, sid) {
     const isNew = (SYNCED_NEW[sid] || new Set()).has(id);
     return `
       <div class="item-card${isNew ? ' entry-new' : ''}">
-        <details class="card-details" open>
+        <details class="card-details" data-key="${esc(sid)}-card-${esc(id)}" open>
           <summary class="item-card__header">
             <span class="item-card__icon">👑</span>
             ${editId(sid, id)}
@@ -3141,20 +3456,7 @@ function renderGemCard(sid, fname, gemData) {
       const bp = `bonuses-by-level.${lvl}`;
       return igCollapsible(
         `✨ ${T('Level')} ${lvl}`,
-        `${igBonusItemStats(sid, fname, `${bp}.item-stats`, bonus['item-stats'] ?? {})}
-         ${igBonusTypeMap(sid, fname, `${bp}.damage-types`,  bonus['damage-types']  ?? {}, 'damage',  'Damage Types',  '⚔️')}
-         ${igBonusTypeMap(sid, fname, `${bp}.defense-types`, bonus['defense-types'] ?? {}, 'defense', 'Defense Types', '🛡️')}
-         <div style="margin-bottom:8px">
-           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🔥 ${T('Damage Buffs %')}</div>
-           ${igLineKvField(sid, fname, `${bp}.damage-buffs`, bonus['damage-buffs'] ?? {}, 'type value%')}
-           <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>physical 5%</code></p>
-         </div>
-         <div style="margin-bottom:8px">
-           <div style="font-size:11px;font-weight:600;color:#bbb;margin-bottom:4px">🛡 ${T('Defense Buffs %')}</div>
-           ${igLineKvField(sid, fname, `${bp}.defense-buffs`, bonus['defense-buffs'] ?? {}, 'type value%')}
-           <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>physical 3%</code></p>
-         </div>
-         ${igBonusTypeMap(sid, fname, `${bp}.penetrations`, bonus['penetrations'] ?? {}, 'penetration', 'Penetrations', '🎯')}
+        `${igBonusStats(sid, fname, bp, bonus)}
          ${igGemSkillsList(sid, fname, `${bp}.skills`, bonus.skills ?? {})}
          <button class="btn-icon btn-del" style="margin-top:6px"
            onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses-by-level','${escJs(String(lvl))}')">🗑 ${T('Remove level')}</button>`,
@@ -3175,8 +3477,8 @@ function renderGemCard(sid, fname, gemData) {
     ${cardRow(T('Item types'), `
       ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
       <p class="muted small" style="margin-top:3px">${T('WEAPON / ARMOR / * (any).')}</p>`)}
-    ${cardRow(T('Socket category'), igField(sid, fname, 'target-requirements.socket', tr.socket ?? 'common'))}
-    ${cardRow(T('Required tier'),   igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+    ${cardRow(T('Socket category'), igSocketCatField(sid, fname, 'target-requirements.socket', tr.socket ?? 'common'))}
+    ${cardRow(T('Required tier'),   igTierField(sid, fname, 'target-requirements.tier',   tr.tier   ?? '', true))}
     ${cardRow(T('Modules (one per line)'),
       `${igLineArray(sid, fname, 'target-requirements.module', Array.isArray(tr.module) ? tr.module : (tr.module ? [tr.module] : []))}
        <p class="muted small" style="margin-top:2px">${T('Module IDs or <code>*</code> for all.')}</p>`)}
@@ -3187,7 +3489,7 @@ function renderGemCard(sid, fname, gemData) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">💎</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3200,12 +3502,10 @@ function renderGemCard(sid, fname, gemData) {
         </summary>
         <div class="item-card__body">
           ${cardRow(T('Material'),       igField(sid, fname, 'material',       material))}
-          ${cardRow(T('Name'),           igField(sid, fname, 'name',           name,     'edit-input--format'))}
-          <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(name)}</div>
-          ${cardRow(T('Socket display'), igField(sid, fname, 'socket-display', sockDisp, 'edit-input--format'))}
-          <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(sockDisp)}</div>
+          ${cardRow(T('Name'),           igFieldPrev(sid, fname, 'name',           name))}
+          ${cardRow(T('Socket display'), igFieldPrev(sid, fname, 'socket-display', sockDisp))}
           ${cardRow(T('Lore'), igLoreFormat(sid, fname, 'lore', loreLines))}
-          ${cardRow(T('Tier'),       igField(sid, fname, 'tier',      tier))}
+          ${cardRow(T('Tier'),       igTierField(sid, fname, 'tier',  tier))}
           ${cardRow(T('Enchanted'),  igCheck(sid, fname, 'enchanted', enchanted))}
           ${cardRow(T('Item flags'), igItemFlags(sid, fname, flags))}
           ${cardRow(T('Level min / max'),
@@ -3310,12 +3610,10 @@ function socketItemBaseRows(sid, fname, data) {
   const succByLvl = data['success-rate-by-level'] ?? {};
   return `
     ${cardRow(T('Material'),       igField(sid, fname, 'material',       data.material         ?? 'PRISMARINE_SHARD'))}
-    ${cardRow(T('Name'),           igField(sid, fname, 'name',           data.name             ?? '', 'edit-input--format'))}
-    <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data.name ?? '')}</div>
-    ${cardRow(T('Socket display'), igField(sid, fname, 'socket-display', data['socket-display'] ?? '', 'edit-input--format'))}
-    <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data['socket-display'] ?? '')}</div>
+    ${cardRow(T('Name'),           igFieldPrev(sid, fname, 'name',           data.name             ?? ''))}
+    ${cardRow(T('Socket display'), igFieldPrev(sid, fname, 'socket-display', data['socket-display'] ?? ''))}
     ${cardRow(T('Lore'), igLoreFormat(sid, fname, 'lore', loreLines))}
-    ${cardRow(T('Tier'),      igField(sid, fname, 'tier',      data.tier      ?? 'common'))}
+    ${cardRow(T('Tier'),      igTierField(sid, fname, 'tier',  data.tier      ?? 'common'))}
     ${cardRow(T('Enchanted'), igCheck(sid, fname, 'enchanted', !!data.enchanted))}
     ${cardRow(T('Item flags'), igItemFlags(sid, fname, flags))}
     ${cardRow(T('Level min / max'),
@@ -3340,13 +3638,17 @@ function socketItemBaseRows(sid, fname, data) {
       ${cardRow(T('Skull Hash'), igField(sid, fname, 'skull-hash', data['skull-hash'] ?? ''))}
       <p class="muted small" style="margin-top:-4px;margin-bottom:6px">${T('Skull texture hash (PLAYER_HEAD material).')}</p>
       ${cardRow(T('Unbreakable'), igCheck(sid, fname, 'unbreakable', !!data.unbreakable))}
+      ${cardRow(T('Fire Resistant'), igCheck(sid, fname, 'fire-resistant', data['fire-resistant'] === true))}
+      ${cardRow(T('Durability'),
+        `${igNum(sid, fname, 'durability', data.durability ?? -1)}
+         <span class="muted small" style="margin-left:6px">${T('-1 = default')}</span>`)}
       ${cardRow(T('Enchantments'),
         `${igLineKvFieldNum(sid, fname, 'enchantments', data.enchantments ?? {}, 'enchantment_id level')}
          <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>sharpness 4</code></p>`)}
       ${cardRow(T('Attributes'),
         `${igLineKvField(sid, fname, 'attributes', data.attributes ?? {}, 'ATTRIBUTE_NAME value:operation:slot')}
          <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>ATTACK_DAMAGE 2:ADD_NUMBER:HAND</code></p>`)}
-    `, !!(data['skull-hash'] || data.unbreakable || (data['model-data'] ?? -1) >= 0 || Object.keys(data.enchantments ?? {}).length || Object.keys(data.attributes ?? {}).length), `${fname}:advanced`)}`;
+    `, !!(data['skull-hash'] || data.unbreakable || data['fire-resistant'] || (data['model-data'] ?? -1) >= 0 || (data.durability ?? -1) >= 0 || Object.keys(data.enchantments ?? {}).length || Object.keys(data.attributes ?? {}).length), `${fname}:advanced`)}`;
 }
 
 function socketItemTargetRows(sid, fname, data) {
@@ -3356,8 +3658,8 @@ function socketItemTargetRows(sid, fname, data) {
     ${cardRow(T('Item types'), `
       ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
       <p class="muted small" style="margin-top:3px">${T('WEAPON / ARMOR / * (any).')}</p>`)}
-    ${cardRow(T('Socket category'), igField(sid, fname, 'target-requirements.socket', tr.socket ?? 'default'))}
-    ${cardRow(T('Required tier'),   igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+    ${cardRow(T('Socket category'), igSocketCatField(sid, fname, 'target-requirements.socket', tr.socket ?? 'default'))}
+    ${cardRow(T('Required tier'),   igTierField(sid, fname, 'target-requirements.tier',   tr.tier   ?? '', true))}
     ${cardRow(T('Modules (one per line)'),
       `${igLineArray(sid, fname, 'target-requirements.module', modArr)}
        <p class="muted small" style="margin-top:2px">${T('Module IDs or <code>*</code> for all. Leave empty for no restriction.')}</p>`)}
@@ -3378,7 +3680,7 @@ function renderEssenceCard(sid, fname, data) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">✨</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3476,7 +3778,7 @@ function renderRuneCard(sid, fname, data) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">🔷</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3634,15 +3936,15 @@ function igVariablesByLevel(sid, fname, path, data) {
 function arrowItemBaseRows(sid, fname, data) {
   const loreLines = Array.isArray(data.lore) ? data.lore : [];
   const flags     = data['item-flags'] ?? [];
-  const hasAdv    = !!(data['skull-hash'] || data.unbreakable || (data['model-data'] ?? -1) >= 0
+  const hasAdv    = !!(data['skull-hash'] || data.unbreakable || data['fire-resistant'] || (data['model-data'] ?? -1) >= 0
+                    || (data.durability ?? -1) >= 0
                     || Object.keys(data.enchantments ?? {}).length || Object.keys(data.attributes ?? {}).length
                     || data['armor-trim']);
   return `
     ${cardRow(T('Material'),      igField(sid, fname, 'material',   data.material        ?? 'ARROW'))}
-    ${cardRow(T('Name'),          igField(sid, fname, 'name',       data.name            ?? '', 'edit-input--format'))}
-    <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data.name ?? '')}</div>
+    ${cardRow(T('Name'),          igFieldPrev(sid, fname, 'name',   data.name            ?? ''))}
     ${cardRow(T('Lore'), igLoreFormat(sid, fname, 'lore', loreLines))}
-    ${cardRow(T('Tier'),          igField(sid, fname, 'tier',       data.tier            ?? 'common'))}
+    ${cardRow(T('Tier'),          igTierField(sid, fname, 'tier',   data.tier            ?? 'common'))}
     ${cardRow(T('Enchanted'),     igCheck(sid, fname, 'enchanted',  !!data.enchanted))}
     ${cardRow(T('Item flags'),    igItemFlags(sid, fname, flags))}
     ${cardRow(T('Color (R,G,B)'), igColorField(sid, fname, 'color', String(data.color ?? '-1,-1,-1')))}
@@ -3662,6 +3964,10 @@ function arrowItemBaseRows(sid, fname, data) {
         ${igField(sid, fname, 'armor-trim', data['armor-trim'] ?? '')}
         <p class="muted small" style="margin-top:2px">${T('Format')}: <code>material:pattern</code></p>`)}
       ${cardRow(T('Unbreakable'), igCheck(sid, fname, 'unbreakable', !!data.unbreakable))}
+      ${cardRow(T('Fire Resistant'), igCheck(sid, fname, 'fire-resistant', data['fire-resistant'] === true))}
+      ${cardRow(T('Durability'),
+        `${igNum(sid, fname, 'durability', data.durability ?? -1)}
+         <span class="muted small" style="margin-left:6px">${T('-1 = default')}</span>`)}
       ${cardRow(T('Enchantments'),
         `${igLineKvFieldNum(sid, fname, 'enchantments', data.enchantments ?? {}, 'enchantment_id level')}
          <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>sharpness 4</code></p>`)}
@@ -3675,15 +3981,15 @@ function arrowItemBaseRows(sid, fname, data) {
 function consumableItemBaseRows(sid, fname, data) {
   const loreLines = Array.isArray(data.lore) ? data.lore : [];
   const flags     = data['item-flags'] ?? [];
-  const hasAdv    = !!(data.unbreakable || (data['model-data'] ?? -1) >= 0
+  const hasAdv    = !!(data.unbreakable || data['fire-resistant'] || (data['model-data'] ?? -1) >= 0
+                    || (data.durability ?? -1) >= 0
                     || Object.keys(data.enchantments ?? {}).length || Object.keys(data.attributes ?? {}).length
                     || data['armor-trim']);
   return `
     ${cardRow(T('Material'),      igField(sid, fname, 'material',    data.material        ?? 'POTION'))}
-    ${cardRow(T('Name'),          igField(sid, fname, 'name',        data.name            ?? '', 'edit-input--format'))}
-    <div class="lore-preview" style="margin-bottom:4px">${mc.toHtml(data.name ?? '')}</div>
+    ${cardRow(T('Name'),          igFieldPrev(sid, fname, 'name',    data.name            ?? ''))}
     ${cardRow(T('Lore'), igLoreFormat(sid, fname, 'lore', loreLines))}
-    ${cardRow(T('Tier'),          igField(sid, fname, 'tier',        data.tier            ?? 'common'))}
+    ${cardRow(T('Tier'),          igTierField(sid, fname, 'tier',    data.tier            ?? 'common'))}
     ${cardRow(T('Skull hash'),    igField(sid, fname, 'skull-hash',  data['skull-hash']   ?? ''))}
     ${cardRow(T('Color (R,G,B)'), igColorField(sid, fname, 'color', String(data.color ?? '-1,-1,-1')))}
     ${cardRow(T('Item flags'),    igItemFlags(sid, fname, flags))}
@@ -3702,6 +4008,10 @@ function consumableItemBaseRows(sid, fname, data) {
         ${igField(sid, fname, 'armor-trim', data['armor-trim'] ?? '')}
         <p class="muted small" style="margin-top:2px">${T('Format')}: <code>material:pattern</code></p>`)}
       ${cardRow(T('Unbreakable'), igCheck(sid, fname, 'unbreakable', !!data.unbreakable))}
+      ${cardRow(T('Fire Resistant'), igCheck(sid, fname, 'fire-resistant', data['fire-resistant'] === true))}
+      ${cardRow(T('Durability'),
+        `${igNum(sid, fname, 'durability', data.durability ?? -1)}
+         <span class="muted small" style="margin-left:6px">${T('-1 = default')}</span>`)}
       ${cardRow(T('Enchantments'),
         `${igLineKvFieldNum(sid, fname, 'enchantments', data.enchantments ?? {}, 'enchantment_id level')}
          <p class="muted small" style="margin-top:2px">${T('e.g.')} <code>sharpness 4</code></p>`)}
@@ -3720,9 +4030,9 @@ function renderArrowCard(sid, fname, data) {
     .sort(([a], [b]) => +a - +b)
     .map(([lvl, bonus]) => igCollapsible(
       `✨ ${T('Level')} ${lvl}`,
-      `${igBonusTypeMap(sid, fname, `bonuses-by-level.${lvl}.additional-stats`,  bonus['additional-stats']  ?? {}, 'general', 'Additional Stats',  '📊')}
-       ${igLineKvField(sid, fname,  `bonuses-by-level.${lvl}.additional-damage`, bonus['additional-damage'] ?? {}, 'damage_type value%  (e.g. physical 10%)')}
-       ${igLineKvField(sid, fname,  `bonuses-by-level.${lvl}.defense-ignoring`,  bonus['defense-ignoring']  ?? {}, 'damage_type value%  (e.g. physical 50%)')}
+      `${igBonusRows(sid, fname, `bonuses-by-level.${lvl}.additional-stats`,  bonus['additional-stats']  ?? {}, 'general', 'Additional Stats',  '📊')}
+       ${igBonusRows(sid, fname, `bonuses-by-level.${lvl}.additional-damage`, bonus['additional-damage'] ?? {}, 'damage',  'Additional Damage', '⚔️')}
+       ${igBonusRows(sid, fname, `bonuses-by-level.${lvl}.defense-ignoring`,  bonus['defense-ignoring']  ?? {}, 'defense', 'Defense Ignoring',  '🛡')}
        <button class="btn-icon btn-del" style="margin-top:6px"
          onclick="APP.igRemoveFromPath('${sid}','${escJs(fname)}','bonuses-by-level','${escJs(String(lvl))}')">🗑 ${T('Remove level')}</button>`,
       true, `${fname}:arrow-lvl-${lvl}`)).join('');
@@ -3731,7 +4041,7 @@ function renderArrowCard(sid, fname, data) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">🏹</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3764,8 +4074,7 @@ function renderArrowCard(sid, fname, data) {
               ${cardRow(T('Item types'), `
                 ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
                 <p class="muted small" style="margin-top:3px">${T('WEAPON / ARMOR / * (any).')}</p>`)}
-              ${cardRow(T('Socket cat.'),   igField(sid, fname, 'target-requirements.socket', tr.socket ?? ''))}
-              ${cardRow(T('Required tier'), igField(sid, fname, 'target-requirements.tier',   tr.tier   ?? ''))}
+              ${cardRow(T('Required tier'), igTierField(sid, fname, 'target-requirements.tier',   tr.tier   ?? '', true))}
               ${cardRow(T('Modules'), igLineArray(sid, fname, 'target-requirements.module', modArr))}
               <p class="muted small" style="margin-top:-6px;margin-bottom:4px">${T('One module key per line, e.g.')} <code>bow</code>. ${T('Use <code>*</code> for any.')}</p>
               ${cardRow(T('Level map'), igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'min: max  (e.g. 1: 10)'))}`;
@@ -3841,7 +4150,7 @@ function renderConsumableCard(sid, fname, data) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">🧪</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -3877,6 +4186,8 @@ function renderConsumableCard(sid, fname, data) {
           ${igCollapsible(`🖱️ ${T('Usage (click actions)')}`, `
             ${igCollapsible(`👉 ${T('RIGHT click')}`, igUsageSlot(sid, fname, 'usage.RIGHT', usage.RIGHT ?? {}), true,  `${fname}:usage-right`)}
             ${igCollapsible(`👈 ${T('LEFT click')}`,  igUsageSlot(sid, fname, 'usage.LEFT',  usage.LEFT  ?? {}), false, `${fname}:usage-left`)}
+            ${igCollapsible(`⇧👉 ${T('SHIFT + RIGHT click')}`, igUsageSlot(sid, fname, 'usage.SHIFT_RIGHT', usage.SHIFT_RIGHT ?? {}), false, `${fname}:usage-shift-right`)}
+            ${igCollapsible(`⇧👈 ${T('SHIFT + LEFT click')}`,  igUsageSlot(sid, fname, 'usage.SHIFT_LEFT',  usage.SHIFT_LEFT  ?? {}), false, `${fname}:usage-shift-left`)}
           `, false, `${fname}:usage`)}
 
           ${igCollapsible(`🎯 ${T('Target requirements')}`, (() => {
@@ -3886,7 +4197,7 @@ function renderConsumableCard(sid, fname, data) {
               ${cardRow(T('Item types'), `
                 ${igTypeButtons(sid, fname, 'target-requirements.type', tr.type ?? [])}
                 <p class="muted small" style="margin-top:3px">${T('WEAPON / ARMOR / * (any).')}</p>`)}
-              ${cardRow(T('Required tier'), igField(sid, fname, 'target-requirements.tier', tr.tier ?? ''))}
+              ${cardRow(T('Required tier'), igTierField(sid, fname, 'target-requirements.tier', tr.tier ?? '', true))}
               ${cardRow(T('Modules'), igLineArray(sid, fname, 'target-requirements.module', modArr))}
               <p class="muted small" style="margin-top:-6px;margin-bottom:4px">${T('One module key per line, e.g.')} <code>sword</code>. ${T('Use <code>*</code> for any.')}</p>
               ${cardRow(T('Level map'), igLineKvField(sid, fname, 'target-requirements.level', tr.level ?? {}, 'min: max  (e.g. 1: 10)'))}`;
@@ -3955,6 +4266,7 @@ function renderCustomItemCard(sid, fname, d) {
   const loreLines   = d.lore              ?? [];
   const color       = d.color             ?? '-1,-1,-1';
   const unbreakable = d.unbreakable       ?? false;
+  const fireResistant = d['fire-resistant'] ?? false;
   const flags       = d['item-flags']     ?? [];
   const enchants    = d.enchantments      ?? {};
   const modelData   = d['model-data']     ?? -1;
@@ -4006,7 +4318,7 @@ function renderCustomItemCard(sid, fname, d) {
 
   return `
     <div class="item-card">
-      <details class="card-details" open>
+      <details class="card-details" data-key="${esc(sid)}-card-${esc(fname)}" open>
         <summary class="item-card__header">
           <span class="item-card__icon">🎁</span>
           <span style="flex:1;font-weight:600;color:#fff">${esc(fname)}</span>
@@ -4020,6 +4332,7 @@ function renderCustomItemCard(sid, fname, d) {
         <div class="item-card__body">
 
           ${cardRow(T('Material'), igField(sid, fname, 'material', material))}
+          ${cardRow(T('Tier'),     igTierField(sid, fname, 'tier', d.tier ?? 'default'))}
           ${cardRow(T('Name'),     igField(sid, fname, 'name',     name, 'edit-input--format'))}
           ${itemPreview}
 
@@ -4030,6 +4343,7 @@ function renderCustomItemCard(sid, fname, d) {
              <p class="muted small" style="margin-top:2px">${T('Leather armor / potion color.')} <code>-1,-1,-1</code> = ${T('default.')}</p>`)}
 
           ${cardRow(T('Unbreakable'), igCheck(sid, fname, 'unbreakable', unbreakable))}
+          ${cardRow(T('Fire Resistant'), igCheck(sid, fname, 'fire-resistant', fireResistant))}
           ${cardRow(T('Glint (enchanted look)'), igCheck(sid, fname, 'enchanted', enchanted))}
           ${cardRow(T('Item Flags'), igItemFlags(sid, fname, flags))}
 
@@ -4185,6 +4499,10 @@ function calcBuild() {
       for (const [t, v] of Object.entries(bonuses['damage-types']  || {})) totalDmg[t]   = (totalDmg[t]   || 0) + (parseFloat(String(v)) || 0);
       for (const [t, v] of Object.entries(bonuses['defense-types'] || {})) totalDef[t]   = (totalDef[t]   || 0) + (parseFloat(String(v)) || 0);
       for (const [s, v] of Object.entries(bonuses['item-stats']    || {})) totalStats[s] = (totalStats[s] || 0) + (parseFloat(String(v)) || 0);
+      // %-buffs + penetration route into totalStats under plugin stat-id convention so they surface in the stat table
+      for (const [t, v] of Object.entries(bonuses['damage-buffs']  || {})) totalStats['damagebuff_'+t]  = (totalStats['damagebuff_'+t]  || 0) + (parseFloat(String(v)) || 0);
+      for (const [t, v] of Object.entries(bonuses['defense-buffs'] || {})) totalStats['defensebuff_'+t] = (totalStats['defensebuff_'+t] || 0) + (parseFloat(String(v)) || 0);
+      for (const [k, v] of Object.entries(bonuses['penetrations']  || {})) totalStats['penetration_'+k] = (totalStats['penetration_'+k] || 0) + (parseFloat(String(v)) || 0);
     }
   }
 
@@ -4273,6 +4591,9 @@ function calcBuild() {
         for (const [t, v] of Object.entries(bonusData['damage-types']  || {})) totalDmg[t]   = (totalDmg[t]   || 0) + (parseFloat(String(v)) || 0);
         for (const [t, v] of Object.entries(bonusData['defense-types'] || {})) totalDef[t]   = (totalDef[t]   || 0) + (parseFloat(String(v)) || 0);
         for (const [s, v] of Object.entries(bonusData['item-stats']    || {})) totalStats[s] = (totalStats[s] || 0) + (parseFloat(String(v)) || 0);
+        for (const [t, v] of Object.entries(bonusData['damage-buffs']  || {})) totalStats['damagebuff_'+t]  = (totalStats['damagebuff_'+t]  || 0) + (parseFloat(String(v)) || 0);
+        for (const [t, v] of Object.entries(bonusData['defense-buffs'] || {})) totalStats['defensebuff_'+t] = (totalStats['defensebuff_'+t] || 0) + (parseFloat(String(v)) || 0);
+        for (const [k, v] of Object.entries(bonusData['penetrations']  || {})) totalStats['penetration_'+k] = (totalStats['penetration_'+k] || 0) + (parseFloat(String(v)) || 0);
       }
     }
   }
@@ -4306,12 +4627,29 @@ function renderBuildPreview(_data, _sid) {
     const namePreview = itemData
       ? `<span class="build-name-preview">${mc.toHtml(itemData.name ?? '')}</span>` : '';
 
-    // Socket counts — read from item if loaded, else show all slots as available
+    // Socket counts — read from item if loaded, else show all slots as available.
+    // GEM slot count = sum of amount-max across categories with chance>0 (NOT the global
+    // GEM.maximum ceiling, which is just an upper bound). Active categories also drive the
+    // gem dropdown filter so only socket-matching gems are offered.
     const gen     = itemData?.generator || {};
     const sockets = gen.sockets || {};
-    const gemMax  = itemData ? (sockets.GEM?.maximum     ?? 0) : 3;
+    const gemList = sockets.GEM?.list || {};
+    const gemEntries = Object.entries(gemList);
+    // Guaranteed sockets (amount-max>0) → exact count, that category (AttributeGenerator guaranteed pass).
+    const guaranteedGemCats = gemEntries.filter(([, c]) => (c?.['amount-max'] ?? 0) > 0);
+    // Legacy chance sockets (chance>0 & amount-max==0) → random pool fills up to GEM.maximum among them.
+    const legacyGemCats     = gemEntries.filter(([, c]) => (c?.chance ?? 0) > 0 && (c?.['amount-max'] ?? 0) === 0);
+    const guaranteedCount = guaranteedGemCats.reduce((s, [, c]) => s + c['amount-max'], 0);
+    const legacyCount     = legacyGemCats.length ? (sockets.GEM?.maximum ?? 0) : 0;
+    const activeGemCats   = new Set([...guaranteedGemCats, ...legacyGemCats].map(([cat]) => cat.toLowerCase()));
+    const gemMax  = itemData ? (guaranteedCount + legacyCount) : 3;
     const essMax  = itemData ? (sockets.ESSENCE?.maximum ?? 0) : 1;
     const runeMax = itemData ? (sockets.RUNE?.maximum    ?? 0) : 1;
+    // Gem options restricted to the item's active socket categories (weapon/armor/tool/spellpage).
+    const gemOptFiles = (itemData && activeGemCats.size)
+      ? gemFiles.filter(f => activeGemCats.has(
+          String(STATE.loaded?.gems?.files?.[f]?.['target-requirements']?.socket || '').toLowerCase()))
+      : gemFiles;
 
     const itemSelect = `
       <select class="edit-input build-slot-select"
@@ -4338,7 +4676,7 @@ function renderBuildPreview(_data, _sid) {
         <select class="edit-input build-gem-select"
           onchange="APP.buildSetGem('${slotDef.key}',${i},this.value)">
           <option value="">— ${T('no gem')} —</option>
-          ${gemFiles.map(f => `<option value="${esc(f)}"${gf===f?' selected':''}>${esc(f)}</option>`).join('')}
+          ${(gf && !gemOptFiles.includes(gf) ? [gf, ...gemOptFiles] : gemOptFiles).map(f => `<option value="${esc(f)}"${gf===f?' selected':''}>${esc(f)}</option>`).join('')}
         </select>
         ${gf ? `<input class="edit-input edit-input--num" type="number" min="1" max="${gMax}"
           value="${slot.gemLevels[i]||1}" style="width:42px;font-size:11px"
@@ -5551,6 +5889,163 @@ function renderClasses(data, sid) {
 // Renderer registry
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Socket Categories (item_stats/sockets.yml) — GEM / RUNE / ESSENCE
+// ---------------------------------------------------------------------------
+
+const SOCKET_TYPES = [
+  { id: 'GEM',     icon: '💎' },
+  { id: 'RUNE',    icon: '🔷' },
+  { id: 'ESSENCE', icon: '✨' },
+];
+
+/** Datalist of tier ids from the loaded config.yml (Tiers & Groups section), if any. */
+function tierDatalist(listId) {
+  const tiers = STATE.loaded?.mainconfig?.tiers;
+  if (!tiers || typeof tiers !== 'object') return '';
+  return `<datalist id="${listId}">${Object.keys(tiers).map(t => `<option value="${esc(t)}">`).join('')}</datalist>`;
+}
+
+function renderSockets(data, sid) {
+  if (!data) return `<div class="empty-state">${T('No data.')}</div>`;
+  const tierListId = `tiers-dl-${sid}`;
+  const tiersKnown = STATE.loaded?.mainconfig?.tiers;
+
+  const typeSections = SOCKET_TYPES.map(({ id: type, icon }) => {
+    const cats   = data[type]?.categories ?? {};
+    const addId  = `sock-add-${sid}-${type}`;
+    const catCards = Object.entries(cats).map(([catId, cat]) => {
+      const fmt      = cat?.format ?? {};
+      const fmtVal   = fmt.value ?? {};
+      const tierVal  = cat?.tier ?? 'common';
+      const tierIds  = tiersKnown ? Object.keys(tiersKnown).map(t => t.toLowerCase()) : null;
+      const tierBad  = tierIds && !tierIds.includes(String(tierVal).trim().toLowerCase());
+      const warnId   = `sockwarn-${(sid + type + catId).replace(/[^a-z0-9]/gi, '_')}`;
+      const tierWarn = tierIds
+        ? `<span id="${warnId}" class="badge badge-red" style="font-size:9px;${tierBad ? '' : 'display:none'}" title="${T('Tier not found in config.yml tiers — plugin will reject this category')}">⚠ tier</span>`
+        : '';
+      return `
+        <div style="border:1px solid #2a2a3a;border-radius:4px;margin-bottom:6px;padding:8px 10px;background:#18181e">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <b style="min-width:90px;font-size:12px;color:#ccc"><code>${esc(catId)}</code></b> ${tierWarn}
+            <span style="flex:1"></span>
+            <button class="btn-icon btn-del" title="${T('Remove category')}"
+              onclick="if(confirm('${T('Remove')} \\'${escJs(catId)}\\'?'))APP.removeAtPath('${sid}','${escJs(`${type}.categories`)}','${escJs(catId)}')">🗑</button>
+          </div>
+          ${cardRow(T('Tier'), `<input class="edit-input" type="text" list="${tierListId}" value="${esc(tierVal)}"
+            oninput="APP.updateField('${sid}','${escJs(`${type}.categories.${catId}.tier`)}',this.value)${tierIds ? `;updateKnownIdWarn(this,'${warnId}','${esc(JSON.stringify(tierIds))}',false)` : ''}">`)}
+          ${cardRow(T('Name'), editTextPrev(sid, `${type}.categories.${catId}.name`, cat?.name ?? ''))}
+          ${cardRow(T('Format: main'),   editText(sid, `${type}.categories.${catId}.format.main`,         fmt.main ?? '%value%'))}
+          ${cardRow(T('Format: empty'),  editTextPrev(sid, `${type}.categories.${catId}.format.value.empty`,  fmtVal.empty ?? '%TIER_COLOR%□ <%name%>'))}
+          ${cardRow(T('Format: filled'), editTextPrev(sid, `${type}.categories.${catId}.format.value.filled`, fmtVal.filled ?? '%TIER_COLOR%▣ &7%value%'))}
+        </div>`;
+    }).join('');
+
+    return igCollapsibleSingle(`${icon} ${type} <span class="badge badge-blue" style="font-size:10px">${Object.keys(cats).length}</span>`, `
+      ${catCards || `<p class="muted small">${T('No categories defined.')}</p>`}
+      <div class="ig-add-row" style="margin-top:6px">
+        <input id="${addId}" class="edit-input" type="text" placeholder="${T('category id (e.g. rare)')}" style="width:160px">
+        <button class="btn-add-entry"
+          onclick="var v=document.getElementById('${addId}').value.trim();if(v)APP.addAtPath('${sid}','${escJs(`${type}.categories`)}',v,{tier:'common',name:'%TIER_NAME% ${type.charAt(0) + type.slice(1).toLowerCase()} Socket',format:{main:'%value%',value:{empty:'%TIER_COLOR%□ <%name%>',filled:'%TIER_COLOR%▣ &7%value%'}}})">+ ${T('Add category')}</button>
+      </div>`, `sockets:${type}`);
+  }).join('');
+
+  return `
+    <p class="muted small" style="margin:0 0 8px">${T('Items (gems/runes/essences) bind to a category via')} <code>target-requirements.socket</code>. ${T('Category id is matched lowercase.')}</p>
+    ${tierDatalist(tierListId)}
+    ${typeSections}`;
+}
+
+/** igCollapsible variant for single-file sections (no fname in state key). */
+function igCollapsibleSingle(title, content, key) {
+  return igCollapsible(title, content, true, key);
+}
+
+// ---------------------------------------------------------------------------
+// Tiers & Groups (config.yml — tiers / item-groups / item-sub-types)
+// ---------------------------------------------------------------------------
+
+function renderMainConfig(data, sid) {
+  if (!data) return `<div class="empty-state">${T('No data.')}</div>`;
+  const tiers    = data.tiers            ?? {};
+  const groups   = data['item-groups']   ?? {};
+  const subTypes = data['item-sub-types'] ?? {};
+
+  // --- Tiers ---
+  const tierRows = Object.entries(tiers).map(([tid, t]) => {
+    const fid = tid.replace(/[^a-z0-9]/gi, '_');
+    return `
+    <tr class="data-row">
+      <td><code>${esc(tid)}</code></td>
+      <td>
+        <input class="edit-input edit-input--format" type="text" value="${esc(t?.name ?? tid)}"
+          oninput="APP.updateField('${sid}','${escJs(`tiers.${tid}.name`)}',this.value);updateLinePreview(this,'tname-${fid}')">
+        <span id="tname-${fid}" class="lore-preview">${mc.toHtml(String(t?.name ?? tid))}</span>
+      </td>
+      <td><input class="edit-input" type="text" value="${esc(t?.color ?? '&f')}" style="width:70px"
+        oninput="APP.updateField('${sid}','${escJs(`tiers.${tid}.color`)}',this.value);var p=document.getElementById('tcol-${fid}');if(p)p.innerHTML=mc.toHtml(this.value+'■■■')"></td>
+      <td><span id="tcol-${fid}" class="lore-preview">${mc.toHtml(`${t?.color ?? '&f'}■■■`)}</span></td>
+      <td><button class="btn-icon btn-del" onclick="if(confirm('${T('Remove tier')} \\'${escJs(tid)}\\'?'))APP.removeAtPath('${sid}','tiers','${escJs(tid)}')">🗑</button></td>
+    </tr>`;
+  }).join('');
+
+  const tiersSection = igCollapsibleSingle(`🏷️ ${T('Tiers')} <span class="badge badge-blue" style="font-size:10px">${Object.keys(tiers).length}</span>`, `
+    <p class="muted small" style="margin:0 0 6px">${T('Every module item references a tier by id (')}<code>tier: common</code>${T('). An unknown tier id makes the item fail to load.')}</p>
+    <table class="tbl tbl-compact">
+      <thead><tr><th>ID</th><th>${T('Name')}</th><th>${T('Color code')}</th><th>${T('Preview')}</th><th></th></tr></thead>
+      <tbody>${tierRows || `<tr><td colspan="5" class="muted small">${T('No tiers.')}</td></tr>`}</tbody>
+    </table>
+    <div class="ig-add-row" style="margin-top:6px">
+      <input id="tier-add-${sid}" class="edit-input" type="text" placeholder="${T('tier id (lowercase)')}" style="width:160px">
+      <button class="btn-add-entry"
+        onclick="var v=document.getElementById('tier-add-${sid}').value.trim().toLowerCase();if(v)APP.addAtPath('${sid}','tiers',v,{name:'&f'+v,color:'&f'})">+ ${T('Add tier')}</button>
+    </div>`, 'mainconfig:tiers');
+
+  // --- Item groups (fixed enum WEAPON/ARMOR/TOOL — name + materials only) ---
+  const groupCards = ['WEAPON', 'ARMOR', 'TOOL'].map(gid => {
+    const g = groups[gid] ?? {};
+    return `
+      <div style="border:1px solid #2a2a3a;border-radius:4px;margin-bottom:6px;padding:8px 10px;background:#18181e">
+        <b style="font-size:12px;color:#ccc">${esc(gid)}</b>
+        ${cardRow(T('Display name'), editText(sid, `item-groups.${gid}.name`, g.name ?? gid))}
+        ${cardRow(T('Materials'), `
+          ${jsonTextarea(sid, `item-groups.${gid}.materials`, g.materials ?? [])}
+          <p class="muted small" style="margin-top:2px">${T('Material names; wildcards like')} <code>*_SWORD</code> ${T('allowed.')}</p>`)}
+      </div>`;
+  }).join('');
+
+  const groupsSection = igCollapsibleSingle(`🗂️ ${T('Item Groups')}`, `
+    <p class="muted small" style="margin:0 0 6px">${T('Fixed plugin enum — WEAPON / ARMOR / TOOL. Used by')} <code>target-requirements.type</code>.</p>
+    ${groupCards}`, 'mainconfig:groups');
+
+  // --- Item sub-types (free-form) ---
+  const subCards = Object.entries(subTypes).map(([stid, st]) => `
+    <div style="border:1px solid #2a2a3a;border-radius:4px;margin-bottom:6px;padding:8px 10px;background:#18181e">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <b style="min-width:90px;font-size:12px;color:#ccc"><code>${esc(stid)}</code></b>
+        <span style="flex:1"></span>
+        <button class="btn-icon btn-del" onclick="if(confirm('${T('Remove sub-type')} \\'${escJs(stid)}\\'?'))APP.removeAtPath('${sid}','item-sub-types','${escJs(stid)}')">🗑</button>
+      </div>
+      ${cardRow(T('Display name'), editText(sid, `item-sub-types.${stid}.name`, st?.name ?? stid))}
+      ${cardRow(T('Materials'), jsonTextarea(sid, `item-sub-types.${stid}.materials`, st?.materials ?? []))}
+    </div>`).join('');
+
+  const subSection = igCollapsibleSingle(`🧩 ${T('Item Sub-Types')} <span class="badge badge-blue" style="font-size:10px">${Object.keys(subTypes).length}</span>`, `
+    <p class="muted small" style="margin:0 0 6px">${T('Custom material groups (sword, boots, …) — their ids are valid values for')} <code>target-requirements.type</code> ${T('on socket items / consumables.')}</p>
+    ${subCards || `<p class="muted small">${T('No sub-types defined.')}</p>`}
+    <div class="ig-add-row" style="margin-top:6px">
+      <input id="subtype-add-${sid}" class="edit-input" type="text" placeholder="${T('sub-type id (lowercase)')}" style="width:160px">
+      <button class="btn-add-entry"
+        onclick="var v=document.getElementById('subtype-add-${sid}').value.trim().toLowerCase();if(v)APP.addAtPath('${sid}','item-sub-types',v,{name:v,materials:[]})">+ ${T('Add sub-type')}</button>
+    </div>`, 'mainconfig:subtypes');
+
+  return `
+    <p class="muted small" style="margin:0 0 8px">⚠️ ${T('This loads the full Divinity config.yml — only tiers / item-groups / item-sub-types are editable here, all other keys are kept as-is on export (comments are not preserved).')}</p>
+    ${tiersSection}
+    ${groupsSection}
+    ${subSection}`;
+}
+
 const RENDERERS = {
   renderFormula,
   renderGeneralStats,
@@ -5559,6 +6054,8 @@ const RENDERERS = {
   renderPenetration,
   renderBuffs,
   renderCustomStats,
+  renderSockets,
+  renderMainConfig,
   renderItemGenerator,
   renderSets,
   renderGems,

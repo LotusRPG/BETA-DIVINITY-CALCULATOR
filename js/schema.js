@@ -38,7 +38,7 @@ const SCHEMA = {
     },
     {
       label: 'Combat Config',
-      sections: ['formula', 'fabledAttributes', 'skills', 'classes'],
+      sections: ['formula', 'mainconfig', 'sockets', 'fabledAttributes', 'skills', 'classes'],
     },
     {
       label: 'Stats',
@@ -163,6 +163,26 @@ const SCHEMA = {
       file:       'item_stats/stats/custom_stats.yml',
       renderer:   'renderCustomStats',
       description: 'Fully data-driven custom stats. Add entry here → placeholder %Divinity_customstat_<id>% works immediately.',
+    },
+
+    sockets: {
+      id:         'sockets',
+      label:      'Socket Categories',
+      icon:       '⬚',
+      badge:      true,
+      file:       'item_stats/sockets.yml',
+      renderer:   'renderSockets',
+      description: 'Socket category definitions per type (GEM / RUNE / ESSENCE) — tier, display name and slot formats. Gem/rune/essence items reference these via target-requirements.socket.',
+    },
+
+    mainconfig: {
+      id:         'mainconfig',
+      label:      'Tiers & Groups',
+      icon:       '🏷️',
+      badge:      false,
+      file:       'config.yml',
+      renderer:   'renderMainConfig',
+      description: 'Divinity config.yml: item tiers (id, name, color), item group names/materials and item sub-types. Only these sections are edited — the rest of config.yml is preserved on export.',
     },
 
     itemgen: {

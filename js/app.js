@@ -70,6 +70,19 @@ const BUILD_STATE = {
  */
 const SYNCED_NEW = {};
 
+/** Maps an igSync `source` to the aggregate %GENERATOR_*% token that belongs in the item's base `lore`.
+ *  Sockets are handled separately (token = %GENERATOR_SOCKETS_<TYPE>%). */
+const ITEMGEN_GEN_TOKEN = {
+  'section:general':          '%GENERATOR_STATS%',
+  'section:damage':           '%GENERATOR_DAMAGE%',
+  'section:defense':          '%GENERATOR_DEFENSE%',
+  'section:dmgbuff':          '%GENERATOR_DAMAGE_BUFFS%',
+  'section:defbuff':          '%GENERATOR_DEFENSE_BUFFS%',
+  'section:penetration':      '%GENERATOR_PENETRATION%',
+  'section:customstats':      '%GENERATOR_CUSTOM_STATS%',
+  'section:fabledAttributes': '%GENERATOR_FABLED_ATTR%',
+};
+
 /**
  * Custom formula-preview row values (persisted across formula re-renders).
  */
@@ -903,6 +916,35 @@ const APP = {
     renderSection(_activeSection === sid ? sid : _activeSection);
   },
 
+  /** Add a keyed entry under a nested path of a single-file section (e.g. sockets GEM.categories). */
+  addAtPath(sid, path, key, template) {
+    const data = STATE.loaded[sid];
+    if (!data || !key) return;
+    let target = getPath(data, path);
+    if (!target || typeof target !== 'object') {
+      setPath(data, path, {});
+      target = getPath(data, path);
+    }
+    let uniqueKey = key;
+    let i = 2;
+    while (Object.prototype.hasOwnProperty.call(target, uniqueKey)) {
+      uniqueKey = `${key}_${i++}`;
+    }
+    target[uniqueKey] = JSON.parse(JSON.stringify(template));
+    updateBadge(sid);
+    renderSection(sid);
+  },
+
+  /** Remove a keyed entry under a nested path of a single-file section. */
+  removeAtPath(sid, path, key) {
+    const data = STATE.loaded[sid];
+    if (!data) return;
+    const target = getPath(data, path);
+    if (target && typeof target === 'object') delete target[key];
+    updateBadge(sid);
+    renderSection(sid);
+  },
+
   /**
    * Initialize a section with a sensible empty default — no file needed.
    */
@@ -924,6 +966,20 @@ const APP = {
       dmgbuff:     {},
       defbuff:     {},
       customstats: {},
+      sockets: {
+        GEM:     { categories: { default: { tier: 'common', name: '%TIER_NAME% Gem Socket',  format: { main: '%value%', value: { empty: '%TIER_COLOR%□ <%name%>', filled: '%TIER_COLOR%▣ &7%value%' } } } } },
+        RUNE:    { categories: { default: { tier: 'common', name: '%TIER_COLOR%Rune Socket', format: { main: '%value%', value: { empty: '%TIER_COLOR%□ <%name%>', filled: '%TIER_COLOR%▣ &7%value%' } } } } },
+        ESSENCE: { categories: { default: { tier: 'common', name: '%TIER_COLOR%Essence Socket', format: { main: '%value%', value: { empty: '%TIER_COLOR%□ <%name%>', filled: '%TIER_COLOR%▣ &7%value%' } } } } },
+      },
+      mainconfig: {
+        tiers: {
+          common:    { name: '&fCommon',    color: '&f' },
+          rare:      { name: '&9Rare',      color: '&9' },
+          legendary: { name: '&6Legendary', color: '&6' },
+        },
+        'item-groups':    {},
+        'item-sub-types': {},
+      },
     };
     if (!DEFAULTS[sid]) return;
     STATE.loaded[sid] = JSON.parse(JSON.stringify(DEFAULTS[sid]));
@@ -1425,6 +1481,39 @@ const APP = {
     renderSection(_activeSection);
   },
 
+  /** Parse a bonus value ("10" / 10 / "10%") into {num, percent}.
+   *  The trailing % is semantic in Divinity: present = relative bonus, absent = flat. */
+  _bonusParse(v) {
+    const s = String(v ?? '').trim();
+    const percent = s.endsWith('%');
+    const n = parseFloat(percent ? s.slice(0, -1) : s);
+    return { num: isFinite(n) ? n : 0, percent };
+  },
+
+  /** Set the numeric part of a bonus entry, preserving its flat/% flag.
+   *  Stores a Number when flat (clean YAML) and a "N%" string when percent. No re-render → input keeps focus. */
+  igBonusSetNum(sid, fname, path, key, raw) {
+    const files = STATE.loaded[sid]?.files;
+    if (!files?.[fname]) return;
+    const obj = getPath(files[fname], path);
+    if (!obj || typeof obj !== 'object') return;
+    const { percent } = this._bonusParse(obj[key]);
+    const n = parseFloat(raw);
+    const num = isFinite(n) ? n : 0;
+    obj[key] = percent ? (num + '%') : num;
+  },
+
+  /** Set the flat/% flag of a bonus entry, preserving its number. */
+  igBonusSetPercent(sid, fname, path, key, percent) {
+    const files = STATE.loaded[sid]?.files;
+    if (!files?.[fname]) return;
+    const obj = getPath(files[fname], path);
+    if (!obj || typeof obj !== 'object') return;
+    const { num } = this._bonusParse(obj[key]);
+    obj[key] = percent ? (num + '%') : num;
+    renderSection(_activeSection);
+  },
+
   /** Add a blank entry to one of the 3 bonus categories (material-modifiers / material / class). */
   igBonusAddEntry(sid, fname, bonusCat) {
     const files = STATE.loaded[sid]?.files;
@@ -1812,7 +1901,20 @@ const APP = {
       if (!targetKeys.has(k) && !META_KEYS.has(k)) delete pool[k];
     });
 
+    // Ensure the aggregate %GENERATOR_*% token is in the item's base lore, else the synced block never renders.
+    const genToken = ITEMGEN_GEN_TOKEN[source];
+    if (genToken) this._ensureGenToken(file, genToken);
+
     if (!_silent) renderSection(_activeSection);
+  },
+
+  /** Append an aggregate %GENERATOR_*% token to the item's base `lore` if absent. Non-destructive (only adds). */
+  _ensureGenToken(file, token) {
+    if (!file || !Array.isArray(file.lore)) return;
+    const up = token.toUpperCase();
+    if (!file.lore.some(l => String(l).toUpperCase().includes(up))) {
+      file.lore.push(token);
+    }
   },
 
   /** Add a raw entry to any plain-object section (ammo, hand, etc.) without STATS-specific logic. */
@@ -1850,7 +1952,7 @@ const APP = {
     )];
 
     if (!tiers.length) {
-      alert(`No socket-category values found in loaded ${modSid} files. Make sure each file has 'target-requirements.socket' set.`);
+      if (!_silent) alert(`No socket-category values found in loaded ${modSid} files. Make sure each file has 'target-requirements.socket' set.`);
       return;
     }
 
@@ -1886,6 +1988,9 @@ const APP = {
     // Remove stale
     Object.keys(pool).forEach(k => { if (!tierSet.has(k.toLowerCase())) delete pool[k]; });
 
+    // Ensure the aggregate socket token is in the item's base lore.
+    this._ensureGenToken(file, `%GENERATOR_SOCKETS_${type}%`);
+
     if (!_silent) renderSection(_activeSection);
   },
 
@@ -1893,7 +1998,8 @@ const APP = {
    * Sync ALL stat pools and socket lore-formats for a single itemgen file in one go.
    * Only syncs from sections that are actually loaded — silently skips missing ones.
    */
-  igSyncAll(sid, fname) {
+  /** Run all stat-pool + socket syncs for ONE file, WITHOUT re-rendering. Shared by single-file and bulk sync. */
+  _igSyncFileSilent(sid, fname) {
     const run = (loreFormatPath, poolPath, source, prefix) => {
       this.igSync(sid, fname, loreFormatPath, poolPath, source, prefix, true);
     };
@@ -1913,7 +2019,31 @@ const APP = {
     runSocket('GEM',     'gems');
     runSocket('ESSENCE', 'essences');
     runSocket('RUNE',    'runes');
+  },
 
+  igSyncAll(sid, fname) {
+    this._igSyncFileSilent(sid, fname);
+    renderSection(_activeSection);
+  },
+
+  /** Sync EVERY loaded itemgen file at once (toolbar button). Rewrites lore-format + prunes stale pool entries in all files. */
+  igSyncAllFiles(sid) {
+    const files = STATE.loaded[sid]?.files;
+    const names = files ? Object.keys(files) : [];
+    if (!names.length) { alert(T('No item files loaded.')); return; }
+    if (!confirm(`${T('Sync all stat pools & socket lore for')} ${names.length} ${T('item files? This rewrites each file\'s lore-format and removes stale pool entries.')}`)) return;
+    names.forEach(fn => this._igSyncFileSilent(sid, fn));
+    renderSection(_activeSection);
+  },
+
+  /** Rebuild the item's base `lore` to the canonical full-template layout (all %GENERATOR_*% tokens in standard order). Destructive — overwrites current lore lines. */
+  igSyncMainLore(sid, fname) {
+    const files = STATE.loaded[sid]?.files;
+    if (!files?.[fname]) return;
+    const canonical = window.ITEM_TEMPLATES?.itemgen?.common?.lore;
+    if (!Array.isArray(canonical)) { alert(T('Canonical template lore not found.')); return; }
+    if (!confirm(T('Rebuild main lore to the canonical layout? This overwrites the current lore lines for this item.'))) return;
+    setPath(files[fname], 'lore', JSON.parse(JSON.stringify(canonical)));
     renderSection(_activeSection);
   },
 

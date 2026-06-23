@@ -449,6 +449,7 @@ const TRANSLATIONS = {
     'Black-list (one item per line)': 'Чёрный список (один предмет на строку)',
     'Color (R,G,B)':  'Цвет (R,G,B)',
     'Unbreakable':    'Несокрушимый',
+    'Fire Resistant': 'Огнестойкий',
     'Enchanted':      'Зачарованный',
     'Glint (enchanted look)': 'Свечение (зачар. вид)',
     'Durability %':   'Прочность %',
